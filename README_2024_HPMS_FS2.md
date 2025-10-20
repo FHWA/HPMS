@@ -18,6 +18,7 @@
 This README describes the 2024_HPMS_FS2.geojson export produced by an R script that extracts State Other Freeway and Expressway (FSystem_VN = 2) Highway Performance Monitoring System (HPMS) records for DataYear = 2024 from an SQL Server database, converts the WKB/EWKB geometry to an sf object, and writes spatial outputs (GeoJSON, KML, KMZ). This README accompanies the GeoJSON output and documents metadata, provenance, usage, and known limitations.
 
 # Dataset summary
+- URL: https://datahub.transportation.gov/dataset/HPMS-Spatial-Other-Freeway-and-Expressway-Sections/2eg3-g2qa/
 - Feature count: 399,118 observations (rows)
 - File size: 871 MB
 - Generated: 2025-10-01
@@ -205,4 +206,5 @@ If you use these HPMS data files in a publication, report, or presentation, plea
 	U.S. Federal Highway Administration, Office of Highway Policy Information. 2025. "2024_HPMS_FS2.geojson." Version 2024_HPMS_FS2 v1. U.S. Federal Highway Administration. Generated October 1, 2025. Public domain. SHA-256: d20c8381448a4addf897d17f09e39372496ef05d5fffe911d56b2011b83674ae. (Accessed [Month Day, Year]).
 
 # License
+
 Public Domain U.S. Government (http://www.usa.gov/publicdomain/label/1.0/). All data contained in the described file are in the public domain and may be used without special permission; citation as to source is required.
