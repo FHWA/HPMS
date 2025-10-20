@@ -1,7 +1,7 @@
-# HPMS
+# 2024 HPMS
 
 ## Highway Performance Monitoring System Archives
-- This repository stores Federal Highway Administration, HPMS dataset metadata organized by year and data subset.
+- This repository stores all Federal Highway Administration, HPMS dataset metadata for calendar year 2024.
 
 ## Contact and license
 - U.S. Department of Transportation, Federal Highway Administration, Office of Highway Policy Information, Highway System Performance Division
