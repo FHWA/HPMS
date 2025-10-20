@@ -18,6 +18,7 @@
 This README describes the 2024_HPMS_FS1.geojson export produced by an R script that extracts State Interstate (FSystem_VN = 1) Highway Performance Monitoring System (HPMS) records for DataYear = 2024 from an SQL Server database, converts the WKB/EWKB geometry to an sf object, and writes spatial outputs (GeoJSON, KML, KMZ). This README accompanies the GeoJSON output and documents metadata, provenance, usage, and known limitations.
 
 # Dataset summary
+- URL: https://datahub.transportation.gov/Roadways-and-Bridges/HPMS-Spatial-Interstate-Sections-2024/biau-pyce/
 - Feature count: 996,106 observations (rows)
 - File size: 315 MB
 - Generated: 2025-10-01
@@ -206,4 +207,5 @@ If you use these HPMS data files in a publication, report, or presentation, plea
 	U.S. Federal Highway Administration, Office of Highway Policy Information. 2025. "2024_HPMS_FS1.geojson." Version 2024_HPMS_FS1 v1. U.S. Federal Highway Administration. Generated October 1, 2025. Public domain. SHA-256: eeac2ad4cd3e4d187cbe5aed51b968db7b93ae9194a8fdec79610db79ec9ae4d. (Accessed [Month Day, Year]).
 
 # License
+
 Public Domain U.S. Government (http://www.usa.gov/publicdomain/label/1.0/). All data contained in the described file are in the public domain and may be used without special permission; citation as to source is required.
