@@ -15,7 +15,7 @@
 14. License
 
 # Summary
-This README describes the 2024_HPMS_FS3.geojson export produced by an R script that extracts State Other Principal Arterial (FSystem_VN = 2) Highway Performance Monitoring System (HPMS) records for DataYear = 2024 from an SQL Server database, converts the WKB/EWKB geometry to an sf object, and writes spatial outputs (GeoJSON, KML, KMZ). This README accompanies the GeoJSON output and documents metadata, provenance, usage, and known limitations.
+This README describes the 2024_HPMS_FS3.geojson export produced by an R script that extracts State Other Principal Arterial (FSystem_VN = 3) Highway Performance Monitoring System (HPMS) records for DataYear = 2024 from an SQL Server database, converts the WKB/EWKB geometry to an sf object, and writes spatial outputs (GeoJSON, KML, KMZ). This README accompanies the GeoJSON output and documents metadata, provenance, usage, and known limitations.
 
 # Dataset summary
 - Feature count: 2,437,289 observations (rows)
@@ -205,4 +205,5 @@ If you use these HPMS data files in a publication, report, or presentation, plea
 	U.S. Federal Highway Administration, Office of Highway Policy Information. 2025. "2024_HPMS_FS3.geojson." Version 2024_HPMS_FS3 v1. U.S. Federal Highway Administration. Generated October 2, 2025. Public domain. SHA-256: 135bc006b35a44d15fa3d04efe772073c94675d65cf85385a90e25ee27e76cd3. (Accessed [Month Day, Year]).
 
 # License
+
 Public Domain U.S. Government (http://www.usa.gov/publicdomain/label/1.0/). All data contained in the described file are in the public domain and may be used without special permission; citation as to source is required.
