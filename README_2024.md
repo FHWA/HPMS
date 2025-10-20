@@ -1,6 +1,6 @@
 # 2024 HPMS
 
-## Highway Performance Monitoring System Archives
+## 2024 Highway Performance Monitoring System Archives
 - This repository stores all Federal Highway Administration, HPMS dataset metadata for calendar year 2024.
 
 ## Contact and license
