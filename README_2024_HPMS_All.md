@@ -15,7 +15,7 @@
 14. License
 
 # Summary
-This README describes the 2024_HPMS_Fed-Aid.geojson export produced by an R script that extracts all State Highway Performance Monitoring System (HPMS) records for DataYear = 2024 from an SQL Server database, converts the WKB/EWKB geometry to an sf object, and writes spatial outputs (GeoJSON, KML, KMZ). This README accompanies the GeoJSON output and documents metadata, provenance, usage, and known limitations.
+This README describes the 2024_HPMS_All.geojson export produced by an R script that extracts all State Highway Performance Monitoring System (HPMS) records for DataYear = 2024 from an SQL Server database, converts the WKB/EWKB geometry to an sf object, and writes spatial outputs (GeoJSON, KML, KMZ). This README accompanies the GeoJSON output and documents metadata, provenance, usage, and known limitations.
 
 # Dataset summary
 - URL:
@@ -207,4 +207,5 @@ If you use these HPMS data files in a publication, report, or presentation, plea
 	U.S. Federal Highway Administration, Office of Highway Policy Information. 2025. "2024_HPMS_All.geojson." Version 2024_HPMS_All v1. U.S. Federal Highway Administration. Generated October 2, 2025. Public domain. SHA-256: 807e56eedd72fd02f7b4deffb91a6f01bf609548fcf15d11e0e123f3a80540ba. (Accessed [Month Day, Year]).
 
 # License
+
 Public Domain U.S. Government (http://www.usa.gov/publicdomain/label/1.0/). All data contained in the described file are in the public domain and may be used without special permission; citation as to source is required.
