@@ -18,6 +18,7 @@
 This README describes the 2024_HPMS_FS2.geojson export produced by an R script that extracts State National Highway System (NHS > 0) Highway Performance Monitoring System (HPMS) records for DataYear = 2024 from an SQL Server database, converts the WKB/EWKB geometry to an sf object, and writes spatial outputs (GeoJSON, KML, KMZ). This README accompanies the GeoJSON output and documents metadata, provenance, usage, and known limitations.
 
 # Dataset summary
+- URL: https://datahub.transportation.gov/dataset/HPMS-Spatial-NHS-Sections-2024/872a-nd8f/
 - Feature count: 3,656,199 observations (rows)
 - File size: 7.7 GB
 - Generated: 2025-10-02
@@ -205,4 +206,5 @@ If you use these HPMS data files in a publication, report, or presentation, plea
 	U.S. Federal Highway Administration, Office of Highway Policy Information. 2025. "2024_HPMS_NHS.geojson." Version 2024_HPMS_NHS v1. U.S. Federal Highway Administration. Generated October 2, 2025. Public domain. SHA-256: 893e2cd87ceae9a4cb0eca27a16a7f83756feadb42b4bb378fdc2cf3df8b855a. (Accessed [Month Day, Year]).
 
 # License
+
 Public Domain U.S. Government (http://www.usa.gov/publicdomain/label/1.0/). All data contained in the described file are in the public domain and may be used without special permission; citation as to source is required.
