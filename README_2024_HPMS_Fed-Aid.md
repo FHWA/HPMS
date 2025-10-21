@@ -18,6 +18,7 @@
 This README describes the 2024_HPMS_Fed-Aid.geojson export produced by an R script that extracts State Federal-Aid system (F_System < 6 OR (F_System = 6 AND Urban_ID < 99999)) Highway Performance Monitoring System (HPMS) records for DataYear = 2024 from an SQL Server database, converts the WKB/EWKB geometry to an sf object, and writes spatial outputs (GeoJSON, KML, KMZ). This README accompanies the GeoJSON output and documents metadata, provenance, usage, and known limitations.
 
 # Dataset summary
+- URL: https://datahub.transportation.gov/dataset/HPMS-Spatial-Fed-Aid-Sections-2024/8343-egp4/
 - Feature count: 8,251,196 observations (rows)
 - File size: 17.9 GB
 - Generated: 2025-10-02
@@ -205,4 +206,5 @@ If you use these HPMS data files in a publication, report, or presentation, plea
 	U.S. Federal Highway Administration, Office of Highway Policy Information. 2025. "2024_HPMS_Fed-Aid.geojson." Version 2024_HPMS_Fed-Aid v1. U.S. Federal Highway Administration. Generated October 2, 2025. Public domain. SHA-256: 097362362d7ead4b93186f37e6ba6dd73865b7bba5d0ef5343f340da877e7619. (Accessed [Month Day, Year]).
 
 # License
+
 Public Domain U.S. Government (http://www.usa.gov/publicdomain/label/1.0/). All data contained in the described file are in the public domain and may be used without special permission; citation as to source is required.
