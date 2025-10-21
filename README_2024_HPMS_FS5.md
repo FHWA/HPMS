@@ -18,6 +18,7 @@
 This README describes the 2024_HPMS_FS5.geojson export produced by an R script that extracts State Major Collector (F_System = 5) Highway Performance Monitoring System (HPMS) records for DataYear = 2024 from an SQL Server database, converts the WKB/EWKB geometry to an sf object, and writes spatial outputs (GeoJSON, KML, KMZ). This README accompanies the GeoJSON output and documents metadata, provenance, usage, and known limitations.
 
 # Dataset summary
+- URL: https://datahub.transportation.gov/Roadways-and-Bridges/HPMS-Spatial-Major-Collector-Sections-2024/j2kd-aamz/
 - Feature count: 1,877,692 observations (rows)
 - File size: 5.38 GB
 - Generated: 2025-10-02
@@ -205,4 +206,5 @@ If you use these HPMS data files in a publication, report, or presentation, plea
 	U.S. Federal Highway Administration, Office of Highway Policy Information. 2025. "2024_HPMS_FS5.geojson." Version 2024_HPMS_FS5 v1. U.S. Federal Highway Administration. Generated October 2, 2025. Public domain. SHA-256: bd2b4446ccb386b6d2efd2e1122e4de93d9665aae9722b118ed1e959fbd030e0. (Accessed [Month Day, Year]).
 
 # License
+
 Public Domain U.S. Government (http://www.usa.gov/publicdomain/label/1.0/). All data contained in the described file are in the public domain and may be used without special permission; citation as to source is required.
