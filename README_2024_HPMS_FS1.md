@@ -168,6 +168,11 @@ Typical Python (GeoPandas) example:
 - import geopandas as gpd
 - gdf = gpd.read_file("2024_HPMS_FS1.geojson")
 
+A typical SQL query usually includes the following:
+- Facility_Type in (1, 2)
+- Urban_ID > 0
+- Is_Restricted is NULL
+
 # Known limitations & caveats
 - SRID selection: the script uses the first non-NA SRID found in the SRID column; if multiple SRIDs are present across rows results may not be consistent. Validate SRID consistency before using geometry for precise analysis.
 - Geometry casting: geometries are cast to LINESTRING. If the source contains other geometry types (MULTILINESTRING, GEOMETRYCOLLECTION), casting may alter structure or drop parts. Inspect sample rows if source geometry variability is suspected.
@@ -223,6 +228,7 @@ If you use these HPMS data files in a publication, report, or presentation, plea
 # License
 
 Public Domain U.S. Government (http://www.usa.gov/publicdomain/label/1.0/). All data contained in the described file are in the public domain and may be used without special permission; citation as to source is required.
+
 
 
 
