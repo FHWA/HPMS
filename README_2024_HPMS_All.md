@@ -19,11 +19,11 @@ This README describes the 2024_HPMS_All.geojson export produced by an R script t
 
 # Dataset summary
 - URL: https://datahub.transportation.gov/Roadways-and-Bridges/HPMS-Spatial-All-Sections-2024/42um-tgh5/
-- Feature count: 19,607,202 observations (rows)
-- File size: 45.7 GB
-- Generated: 2025-10-02
+- Feature count: 19,573,739 observations (rows)
+- File size: 49,034,981,675 bytes
+- Generated: 2025-11-10
 - Version: 2024_HPMS_All v1
-- SHA-256 checksum of GeoJSON: 807e56eedd72fd02f7b4deffb91a6f01bf609548fcf15d11e0e123f3a80540ba
+- SHA-256 checksum of GeoJSON: a730042bb766978cde6773b558354c55efd71db1744faafe38894db6d81b2713
 
 # Files in this package
 2024_HPMS_All.geojson - primary GeoJSON file containing HPMS features (LINESTRING) and attributes.
@@ -204,23 +204,24 @@ FHWA, Office of Highway Policy Information. For dataset-specific questions, cont
 If you use these HPMS data files in a publication, report, or presentation, please cite them as follows.
 
 ## Recommended citation
-- U.S. Department of Transportation, Federal Highway Administration, Office of Highway Policy Information: 2024 Highway Performance Monitoring System (HPMS) Interstate Sections (Washington, DC: 2025). Data set: 2024_HPMS_All.geojson (Version 2024_HPMS_All v1). Generated 2025-10-02. Public domain. SHA-256: 807e56eedd72fd02f7b4deffb91a6f01bf609548fcf15d11e0e123f3a80540ba. Contact: PolicyInfoFeedback@dot.gov
+- U.S. Department of Transportation, Federal Highway Administration, Office of Highway Policy Information: 2024 Highway Performance Monitoring System (HPMS) Interstate Sections (Washington, DC: 2025). Data set: 2024_HPMS_All.geojson (Version 2024_HPMS_All v1). Generated 2025-11-10. Public domain. SHA-256: a730042bb766978cde6773b558354c55efd71db1744faafe38894db6d81b2713. Contact: PolicyInfoFeedback@dot.gov
 
 ## Formal citations
 - APA 
 
-	U.S. Federal Highway Administration, Office of Highway Policy Information. (2025). 2024_HPMS_All.geojson (Version 2024_HPMS_All v1) [Data set]. Generated 2025-10-02. Public domain. SHA-256: 807e56eedd72fd02f7b4deffb91a6f01bf609548fcf15d11e0e123f3a80540ba. Contact: PolicyInfoFeedback@dot.gov
+	U.S. Federal Highway Administration, Office of Highway Policy Information. (2025). 2024_HPMS_All.geojson (Version 2024_HPMS_All v1) [Data set]. Generated 2025-11-10. Public domain. SHA-256: a730042bb766978cde6773b558354c55efd71db1744faafe38894db6d81b2713. Contact: PolicyInfoFeedback@dot.gov
 
 - MLA 
 
-	U.S. Federal Highway Administration, Office of Highway Policy Information. 2024_HPMS_All.geojson. Version 2024_HPMS_All v1, U.S. Federal Highway Administration, 02 Oct. 2025. Public domain. SHA-256: 807e56eedd72fd02f7b4deffb91a6f01bf609548fcf15d11e0e123f3a80540ba. Accessed [DATE]. PolicyInfoFeedback@dot.gov .
+	U.S. Federal Highway Administration, Office of Highway Policy Information. 2024_HPMS_All.geojson. Version 2024_HPMS_All v1, U.S. Federal Highway Administration, 10 Nov. 2025. Public domain. SHA-256: a730042bb766978cde6773b558354c55efd71db1744faafe38894db6d81b2713. Accessed [DATE]. PolicyInfoFeedback@dot.gov .
 
 - Chicago (Author-Date) 
 
-	U.S. Federal Highway Administration, Office of Highway Policy Information. 2025. "2024_HPMS_All.geojson." Version 2024_HPMS_All v1. U.S. Federal Highway Administration. Generated October 2, 2025. Public domain. SHA-256: 807e56eedd72fd02f7b4deffb91a6f01bf609548fcf15d11e0e123f3a80540ba. (Accessed [Month Day, Year]).
+	U.S. Federal Highway Administration, Office of Highway Policy Information. 2025. "2024_HPMS_All.geojson." Version 2024_HPMS_All v1. U.S. Federal Highway Administration. Generated November 10, 2025. Public domain. SHA-256: a730042bb766978cde6773b558354c55efd71db1744faafe38894db6d81b2713. (Accessed [Month Day, Year]).
 
 # License
 
 Public Domain U.S. Government (http://www.usa.gov/publicdomain/label/1.0/). All data contained in the described file are in the public domain and may be used without special permission; citation as to source is required.
+
 
 
