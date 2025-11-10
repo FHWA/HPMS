@@ -167,6 +167,11 @@ Typical Python (GeoPandas) example:
 - import geopandas as gpd
 - gdf = gpd.read_file("2024_HPMS_All.geojson")
 
+A typical SQL query usually includes the following:
+- Facility_Type in (1, 2)
+- Urban_ID > 0
+- Is_Restricted is NULL
+
 # Known limitations & caveats
 - SRID selection: the script uses the first non-NA SRID found in the SRID column; if multiple SRIDs are present across rows results may not be consistent. Validate SRID consistency before using geometry for precise analysis.
 - Geometry casting: geometries are cast to LINESTRING. If the source contains other geometry types (MULTILINESTRING, GEOMETRYCOLLECTION), casting may alter structure or drop parts. Inspect sample rows if source geometry variability is suspected.
@@ -174,7 +179,15 @@ Typical Python (GeoPandas) example:
 - Attribute name modifications: the KML export applies name cleaning/truncation. The GeoJSON should retain original names, but verify if your workflow requires exact original column names.
 - Geospatial overlaps are known to exist in some state provided data and are not changed or corrected by HPMS. While this is not an extensive problem, it may be present in this file.
 - Users wanting to replicate the data in the FHWA publication Highway Statistics, should be aware that some data items are not provided for rural Minor Collectors and all Local roads.  These data will need to be pulled from the appropriate summary table available on the Data Access for HPMS site at: https://data.transportation.gov/stories/s/3uu4-47sa.
+- The data may contain physical spatial gaps. These gaps may be errors created at the source (e.g. during the original digitization of the ARNOLD network) or during data processing in the HPMS application. Gaps created during data processing can occur when there is no reported tabular data to support the ARNOLD network at the location of the gap.
+- The data may contain overlapping ARNOLD network (geometry) features that contain different Route IDs, which are not changed or corrected by HPMS. These overlapping features are most prevalent on roadways not owned by a state agency and locations with concurrently running highway numbers. There are also locations where states provide overlapping features that represent the inventory and non-inventory direction.
+- Facility Type on Interstates in Iowa do not follow the coding guidance stated within the HPMS Field Manual. Interstates in Iowa in the inventory direction provide Facility Type as equal to “1” instead of “2” where the highway operates with traffic moving in both directions during non-peak periods.
+- Curve Classification, Grade Classification, counts of intersection types, and any data item describing intersection geometry or operations should be used with caution when analyzing the Full Join. These items describe the entire sample section or the controlling intersection within that sample as indicated by the associated Sample ID. When these data items are intersected and normalized to create the Full Join, their values will appear within a single homogeneous record that is only a piece of the overall Sample Section. However, they represent the entire Sample Section, which can consist of multiple homogeneous records. Treat the Full Join values for the described data items as aggregates that summarize across the full Sample Section rather than as a single, indivisible observation.
 - Missing substantial portions of data for the following states: North Dakota and New Jersey.
+
+# Disclaimers
+- Unless otherwise stated, all data, metadata and related materials are considered to satisfy the quality standards relative to the purpose for which the data were collected. Although these data and associated metadata have been reviewed for accuracy and completeness and approved for release by the Federal Highway Administration (FHWA), no warranty expressed or implied is made regarding the display or utility of the data for other purposes, nor on all computer systems, nor shall the act of distribution constitute any such warranty.
+- This data has been approved for release by the Federal Highway Administration (FHWA). Although this data has been subjected to rigorous review and is substantially complete, the FHWA reserves the right to revise the data pursuant to further analysis and review. Furthermore, the data is released on condition that neither the FHWA nor the U.S. Government shall be held liable for any damages resulting from its authorized or unauthorized use.
 
 # Reproducibility / script reference
 The outputs were produced by an R script that:
@@ -209,4 +222,5 @@ If you use these HPMS data files in a publication, report, or presentation, plea
 # License
 
 Public Domain U.S. Government (http://www.usa.gov/publicdomain/label/1.0/). All data contained in the described file are in the public domain and may be used without special permission; citation as to source is required.
+
 
