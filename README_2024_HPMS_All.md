@@ -40,11 +40,15 @@ CRS used when writing GeoJSON:
 If SRID was provided and consistent, the export script attempts to use the SRID found in the source data and, if present, preserves an SRID attribute for each feature. If SRID was missing or inconsistent across rows the script defaults to EPSG:4326. Verify the SRID attribute and reproject as needed for projection-sensitive analysis.
 
 # Geometry
-- Geometry type: LINESTRING (the script casts geometries to LINESTRING before writing).
-- Empty geometries: removed (rows with empty geometries are excluded).
-- WKB handling: EWKB-aware parsing was used (st_as_sfc(..., EWKB = TRUE)); the script handles raw WKB and hex-encoded text.
+- Input geometry: Source HPMS geometry are M-enabled ESRI polylines (e.g., PolylineM / LINESTRINGM) as provided in state geodatabases.
+- Output geometry: LINESTRING (GeoJSON output does not include M values).
+- Geometry casting: The script casts input geometries to LINESTRING before writing. Multipart geometries (MULTILINESTRING, GEOMETRYCOLLECTION) are converted to singlepart LINESTRING; parts may be combined or dropped depending on the casting result. Inspect a sample if your workflow depends on multipart fidelity.
+- Empty/invalid geometries: Rows with empty or invalid geometries are excluded from the GeoJSON output. These rows are dropped silently.
+- WKB handling: EWKB-aware parsing is used (st_as_sfc(..., EWKB = TRUE)); the script handles raw WKB and hex-encoded WKB text.
+- Z values: HPMS does not current contain z values.
+- Coordinate Reference System (CRS): GeoJSON output defaults to WGS84 (EPSG:4326) when source SRID is missing or inconsistent. When SRID is present and consistent the SRID attribute is preserved per feature; users should verify and reproject as needed for projection-sensitive analysis.
 
-Note: The GeoJSON is written with "no M values" - HPMS contains M values, but they are not included in the GeoJSON file.  State level HPMS geodatebase files with M-enabled polylines are available at: https://data.transportation.gov/stories/s/3uu4-47sa. 
+Note: HPMS source data contains M values (measures) used for linear referencing; those M values are not included in this GeoJSON. For M-enabled state level HPMS geodatabase/feature-class files, see: https://data.transportation.gov/stories/s/3uu4-47sa
 
 # Attributes / Metadata fields
 The SQL query casts and returns a comprehensive set of HPMS attributes. The GeoJSON contains the following attributes (names as produced by the script), descriptions are from the HPMS Field Manual (link below):
@@ -222,6 +226,7 @@ If you use these HPMS data files in a publication, report, or presentation, plea
 # License
 
 Public Domain U.S. Government (http://www.usa.gov/publicdomain/label/1.0/). All data contained in the described file are in the public domain and may be used without special permission; citation as to source is required.
+
 
 
 
