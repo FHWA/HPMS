@@ -44,7 +44,7 @@ If SRID was provided and consistent, the export script attempts to use the SRID 
 - Empty geometries: removed (rows with empty geometries are excluded).
 - WKB handling: EWKB-aware parsing was used (st_as_sfc(..., EWKB = TRUE)); the script handles raw WKB and hex-encoded text.
 
-Note: The GeoJSON is written with "no M values" - HPMS contains M values, but are not included in the GeoJSON file.  State level HPMS geodatebase files with M-enabled polylines are available at: https://data.transportation.gov/stories/s/3uu4-47sa. 
+Note: The GeoJSON is written with "no M values" - HPMS contains M values, but they are not included in the GeoJSON file.  State level HPMS geodatebase files with M-enabled polylines are available at: https://data.transportation.gov/stories/s/3uu4-47sa. 
 
 # Attributes / Metadata fields
 The SQL query casts and returns a comprehensive set of HPMS attributes. The GeoJSON contains the following attributes (names as produced by the script), descriptions are from the HPMS Field Manual (link below):
@@ -222,6 +222,7 @@ If you use these HPMS data files in a publication, report, or presentation, plea
 # License
 
 Public Domain U.S. Government (http://www.usa.gov/publicdomain/label/1.0/). All data contained in the described file are in the public domain and may be used without special permission; citation as to source is required.
+
 
 
 
