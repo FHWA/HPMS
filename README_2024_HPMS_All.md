@@ -10,9 +10,11 @@
 9. Data Types & Casting
 10. Usage
 11. Known Limitations & Caveats
-12. Reproducibility / Script Reference
-13. Contact
-14. License
+12. Disclaimers
+13. Reproducibility / Script Reference
+14. Contact
+15. Citation
+16. License
 
 # Summary
 This README describes the 2024_HPMS_All.geojson export produced by an R script that extracts all State Highway Performance Monitoring System (HPMS) records for DataYear = 2024 from an SQL Server database, converts the WKB/EWKB geometry to an sf object, and writes spatial outputs (GeoJSON, KML, KMZ). This README accompanies the GeoJSON output and documents metadata, provenance, usage, and known limitations.
@@ -225,6 +227,7 @@ If you use these HPMS data files in a publication, report, or presentation, plea
 # License
 
 Public Domain U.S. Government (http://www.usa.gov/publicdomain/label/1.0/). All data contained in the described file are in the public domain and may be used without special permission; citation as to source is required.
+
 
 
 
