@@ -178,8 +178,6 @@ A typical SQL query usually includes the following:
 - Is_Restricted is NULL
 
 # Known limitations & caveats
-- SRID selection: the script uses the first non-NA SRID found in the SRID column; if multiple SRIDs are present across rows results may not be consistent. Validate SRID consistency before using geometry for precise analysis.
-- Geometry casting: geometries are cast to LINESTRING. If the source contains other geometry types (MULTILINESTRING, GEOMETRYCOLLECTION), casting may alter structure or drop parts. Inspect sample rows if source geometry variability is suspected.
 - M values: M values are not calculated in the GeoJSON export.
 - Attribute name modifications: the KML export applies name cleaning/truncation. The GeoJSON should retain original names, but verify if your workflow requires exact original column names.
 - Geospatial overlaps are known to exist in some state provided data and are not changed or corrected by HPMS. While this is not an extensive problem, it may be present in this file.
@@ -227,6 +225,7 @@ If you use these HPMS data files in a publication, report, or presentation, plea
 # License
 
 Public Domain U.S. Government (http://www.usa.gov/publicdomain/label/1.0/). All data contained in the described file are in the public domain and may be used without special permission; citation as to source is required.
+
 
 
 
