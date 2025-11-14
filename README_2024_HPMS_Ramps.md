@@ -16,7 +16,7 @@
 15. License
 
 # Summary
-This README describes a filtered view of the 2024 HPMS Spatial All Sections data with only Ramp sections from the 2024 Highway Performance Monitoring System (HPMS) attached to the All Road Network of Linear Referenced Data (ARNOLD) network.  The source file was produced using what is known as the “Spatial Full Join” process in HPMS, which is a spatial dynamic segmentation of the HPMS data to create homogeneous roadway sections.  To be included in the file, only one data item (not including StateId, RouteId, BeginPoint, EndPoint, SRID, and Year_Record) must be present on a section of road.  See attached README file for more details.  In addition to the Ramp filter (F_System = 4), the data was also filtered to remove any roadway sections restricted to the public (Is_Restricted = 1), and sections with missing urban IDs (Urban_ID = 0 or null).  The user is encouraged to reach out to PolicyInfoFeedback@dot.gov with any data or data analysis questions or concerns.
+This README describes a filtered view of the 2024 HPMS Spatial All Sections data with only Ramp sections from the 2024 Highway Performance Monitoring System (HPMS) attached to the All Road Network of Linear Referenced Data (ARNOLD) network.  The source file was produced using what is known as the “Spatial Full Join” process in HPMS, which is a spatial dynamic segmentation of the HPMS data to create homogeneous roadway sections.  To be included in the file, only one data item (not including StateId, RouteId, BeginPoint, EndPoint, SRID, and Year_Record) must be present on a section of road.  See attached README file for more details.  In addition to the Ramp filter (Facility_Type = 4), the data was also filtered to remove any roadway sections restricted to the public (Is_Restricted = 1), and sections with missing urban IDs (Urban_ID = 0 or null).  The user is encouraged to reach out to PolicyInfoFeedback@dot.gov with any data or data analysis questions or concerns.
 
 # Dataset summary
 - URL: https://datahub.transportation.gov/Roadways-and-Bridges/HPMS-Spatial-Ramp-Sections-2024/phpr-iuzz/
@@ -29,7 +29,7 @@ This README describes a filtered view of the 2024 HPMS Spatial All Sections data
 # Provenance & source
 - Source database: HPMS9 (SQL Server)
 - Source table: Gold.FullSpatialJoins (as queried by the R script)
-- Query filter: DataYear = 2024 AND (F_System = 4) AND Is_Restricted is NULL AND Urban_ID > 0 
+- Query filter: DataYear = 2024 AND (Facility_Type = 4) AND Is_Restricted is NULL AND Urban_ID > 0 
 - Query ordering: ORDER BY StateId, RouteId, BeginPoint
 - Geometry source: Shape.STAsBinary() (WKB/EWKB) and Shape.STSrid (SRID) from the database
 
