@@ -16,7 +16,7 @@
 15. License
 
 # Summary
-This README describes a filtered view of the 2024 HPMS Spatial All Sections data with only Freeway and Expressway sections from the 2024 Highway Performance Monitoring System (HPMS) attached to the All Road Network of Linear Referenced Data (ARNOLD) network.  The source file was produced using what is known as the “Spatial Full Join” process in HPMS, which is a spatial dynamic segmentation of the HPMS data to create homogeneous roadway sections.  To be included in the file, only one data item (not including StateId, RouteId, BeginPoint, EndPoint, SRID, and Year_Record) must be present on a section of road.  See attached README file for more details.  In addition to the Freeway and Expressway filter (F_System = 2), the data was also filtered to remove any roadway sections restricted to the public (Is_Restricted = 1), sections with missing urban IDs (Urban_ID = 0 or null), and sections identified as a ramp, non-mainline, or planned/unbuilt (Facility_Type = 4, 5, and 7 respectively).  Please note that this view does include data on the non-Inventory direction (Facility_Type = 6), which should be excluded if developing summary statistics, such as total mileages. Failure to exclude the non-inventory direction will result in doubling derived values.  The user is encouraged to reach out to PolicyInfoFeedback@dot.gov with any data or data analysis questions or concerns.
+This README describes a filtered view of the 2024 HPMS Spatial All Sections data with only Other Freeway and Expressway sections from the 2024 Highway Performance Monitoring System (HPMS) attached to the All Road Network of Linear Referenced Data (ARNOLD) network.  The source file was produced using what is known as the “Spatial Full Join” process in HPMS, which is a spatial dynamic segmentation of the HPMS data to create homogeneous roadway sections.  To be included in the file, only one data item (not including StateId, RouteId, BeginPoint, EndPoint, SRID, and Year_Record) must be present on a section of road.  See attached README file for more details.  In addition to the Other Freeway and Expressway filter (F_System = 2), the data was also filtered to remove any roadway sections restricted to the public (Is_Restricted = 1), sections with missing urban IDs (Urban_ID = 0 or null), and sections identified as a ramp, non-mainline, or planned/unbuilt (Facility_Type = 4, 5, and 7 respectively).  Please note that this view does include data on the non-Inventory direction (Facility_Type = 6), which should be excluded if developing summary statistics, such as total mileages. Failure to exclude the non-inventory direction will result in doubling derived values.  The user is encouraged to reach out to PolicyInfoFeedback@dot.gov with any data or data analysis questions or concerns.
 
 # Dataset summary
 - URL: https://datahub.transportation.gov/Roadways-and-Bridges/HPMS-Spatial-Other-Freeway-Expressway-Sections-202/jz72-ehnf/
@@ -187,21 +187,22 @@ FHWA, Office of Highway Policy Information. For dataset-specific questions, cont
 If you use these HPMS data files in a publication, report, or presentation, please cite them as follows.
 
 ## Recommended citation
-- U.S. Department of Transportation, Federal Highway Administration, Office of Highway Policy Information: 2024 Highway Performance Monitoring System (HPMS) Freeway and Expressway Sections (Washington, DC: 2025). Data set: HPMS Spatial Interstate Sections - 2024 (https://datahub.transportation.gov/Roadways-and-Bridges/HPMS-Spatial-Other-Freeway-Expressway-Sections-202/jz72-ehnf/). Generated 2025-11-12. Public domain. Contact: PolicyInfoFeedback@dot.gov
+- U.S. Department of Transportation, Federal Highway Administration, Office of Highway Policy Information: 2024 Highway Performance Monitoring System (HPMS) Other Freeway and Expressway Sections (Washington, DC: 2025). Data set: HPMS Spatial Other Freeway and Expresswa Sections - 2024 (https://datahub.transportation.gov/Roadways-and-Bridges/HPMS-Spatial-Other-Freeway-Expressway-Sections-202/jz72-ehnf/). Generated 2025-11-12. Public domain. Contact: PolicyInfoFeedback@dot.gov
 
 ## Formal citations
 - APA 
 
-	U.S. Federal Highway Administration, Office of Highway Policy Information. (2025). HPMS Spatial Interstate Sections - 2024 (https://datahub.transportation.gov/Roadways-and-Bridges/HPMS-Spatial-Other-Freeway-Expressway-Sections-202/jz72-ehnf/) [Data set]. Generated 2025-11-10. Public domain. Contact: PolicyInfoFeedback@dot.gov
+	U.S. Federal Highway Administration, Office of Highway Policy Information. (2025). HPMS Spatial Other Freeway and Expressway Sections - 2024 (https://datahub.transportation.gov/Roadways-and-Bridges/HPMS-Spatial-Other-Freeway-Expressway-Sections-202/jz72-ehnf/) [Data set]. Generated 2025-11-10. Public domain. Contact: PolicyInfoFeedback@dot.gov
 
 - MLA 
 
-	U.S. Federal Highway Administration, Office of Highway Policy Information. HPMS Spatial Interstate Sections - 2024, U.S. Federal Highway Administration, 10 Nov. 2025. Public domain. SHA-256: Accessed [DATE]. PolicyInfoFeedback@dot.gov.
+	U.S. Federal Highway Administration, Office of Highway Policy Information. HPMS Spatial Other Freeway and Expressway Sections - 2024, U.S. Federal Highway Administration, 10 Nov. 2025. Public domain. SHA-256: Accessed [DATE]. PolicyInfoFeedback@dot.gov.
 
 - Chicago (Author-Date) 
 
-	U.S. Federal Highway Administration, Office of Highway Policy Information. 2025. "HPMS Spatial Interstate Sections - 2024" U.S. Federal Highway Administration. Generated November 12, 2025. Public domain. (Accessed [Month Day, Year]).
+	U.S. Federal Highway Administration, Office of Highway Policy Information. 2025. "HPMS Spatial Other Freeway and Expressway Sections - 2024" U.S. Federal Highway Administration. Generated November 12, 2025. Public domain. (Accessed [Month Day, Year]).
 
 # License
 
 Public Domain U.S. Government (http://www.usa.gov/publicdomain/label/1.0/). All data contained in the described file are in the public domain and may be used without special permission; citation as to source is required.
+
