@@ -16,12 +16,12 @@
 15. License
 
 # Summary
-This README describes a filtered view of the 2024 HPMS Spatial All Sections data with only Federal-Aid (Fed-Aid) sections from the 2024 Highway Performance Monitoring System (HPMS) attached to the All Road Network of Linear Referenced Data (ARNOLD) network.  The source file was produced using what is known as the “Spatial Full Join” process in HPMS, which is a spatial dynamic segmentation of the HPMS data to create homogeneous roadway sections.  To be included in the file, only one data item (not including StateId, RouteId, BeginPoint, EndPoint, SRID, and Year_Record) must be present on a section of road.  See attached README file for more details.  In addition to the Fed-Aid filter (F_System < 6 OR (F_System = 6 AND Urban_ID < 99999)), the data was also filtered to remove any roadway sections restricted to the public (Is_Restricted = 1), sections with missing urban IDs (Urban_ID = 0 or null), and sections identified as a ramp, non-mainline, or planned/unbuilt (Facility_Type = 4, 5, and 7 respectively).  Please note that this view does include data on the non-Inventory direction (Facility_Type = 6), which should be excluded if developing summary statistics, such as total mileages. Failure to exclude the non-inventory direction will result in doubling derived values.  The user is encouraged to reach out to PolicyInfoFeedback@dot.gov with any data or data analysis questions or concerns.
+This README describes a filtered view of the 2024 HPMS Spatial All Sections data with only Ramp sections from the 2024 Highway Performance Monitoring System (HPMS) attached to the All Road Network of Linear Referenced Data (ARNOLD) network.  The source file was produced using what is known as the “Spatial Full Join” process in HPMS, which is a spatial dynamic segmentation of the HPMS data to create homogeneous roadway sections.  To be included in the file, only one data item (not including StateId, RouteId, BeginPoint, EndPoint, SRID, and Year_Record) must be present on a section of road.  See attached README file for more details.  In addition to the Ramp filter (F_System = 4), the data was also filtered to remove any roadway sections restricted to the public (Is_Restricted = 1), and sections with missing urban IDs (Urban_ID = 0 or null).  The user is encouraged to reach out to PolicyInfoFeedback@dot.gov with any data or data analysis questions or concerns.
 
 # Dataset summary
-- URL: https://datahub.transportation.gov/Roadways-and-Bridges/HPMS-Spatial-Federal-Aid-Sections-2024/tf8u-hrm4/
-- Feature count: 7,989,145 observations (rows)
-- File size: 3,898,245,869 bytes (CSV)
+- URL: https://datahub.transportation.gov/Roadways-and-Bridges/HPMS-Spatial-Ramp-Sections-2024/phpr-iuzz/
+- Feature count: 190,074 observations (rows)
+- File size: 113,772,936 bytes (CSV)
 - Generated: 2025-11-14
 - Source data: https://datahub.transportation.gov/Roadways-and-Bridges/HPMS-Spatial-All-Sections-2024/42um-tgh5/
 - SHA-256 checksum of source data GeoJSON: a730042bb766978cde6773b558354c55efd71db1744faafe38894db6d81b2713
@@ -29,7 +29,7 @@ This README describes a filtered view of the 2024 HPMS Spatial All Sections data
 # Provenance & source
 - Source database: HPMS9 (SQL Server)
 - Source table: Gold.FullSpatialJoins (as queried by the R script)
-- Query filter: DataYear = 2024 AND (F_System < 6 OR (F_System = 6 AND Urban_ID < 99999)) AND Is_Restricted is NULL AND Urban_ID > 0 AND Facility_Type IN (1, 2, 6) 
+- Query filter: DataYear = 2024 AND (F_System = 4) AND Is_Restricted is NULL AND Urban_ID > 0 
 - Query ordering: ORDER BY StateId, RouteId, BeginPoint
 - Geometry source: Shape.STAsBinary() (WKB/EWKB) and Shape.STSrid (SRID) from the database
 
@@ -156,7 +156,7 @@ The HPMS Field Manual is the data collection guidance for the state data provide
 The SQL in the script explicitly casts many fields to integer, decimal, or varchar types (see script for exact casts). Expect numeric columns (integers/doubles) and textual fields. If strict typing is required, inspect a sample of attributes in R or a GIS tool.
 
 # Usage
-Mapping and analyzing roadway inventory, attributes, conditions, and usage, of the Fed-Aid system.  The sample data are included and can be expanded and analyzed where full-extent data are not available. It is recommended that the user consult the HPMS Field Manual on how to do this, or reach out to the FHWA, Office of Highway Policy Information for assistance. It is generally, not advised to compare states, especially using the sampled data items since the collection and reporting of these data can vary from state to state.
+Mapping and analyzing roadway inventory, attributes, and usage, of the Ramp sections in HPMS.  
 
 # Known limitations & caveats
 - M values: M values are not calculated in the GeoJSON export.
@@ -186,20 +186,20 @@ FHWA, Office of Highway Policy Information. For dataset-specific questions, cont
 If you use these HPMS data files in a publication, report, or presentation, please cite them as follows.
 
 ## Recommended citation
-- U.S. Department of Transportation, Federal Highway Administration, Office of Highway Policy Information: 2024 Highway Performance Monitoring System (HPMS) Federal-Aid Sections (Washington, DC: 2025). Data set: HPMS Spatial Federal-Aid Sections - 2024 (https://datahub.transportation.gov/Roadways-and-Bridges/HPMS-Spatial-Federal-Aid-Sections-2024/tf8u-hrm4/). Generated 2025-11-14. Public domain. Contact: PolicyInfoFeedback@dot.gov
+- U.S. Department of Transportation, Federal Highway Administration, Office of Highway Policy Information: 2024 Highway Performance Monitoring System (HPMS) Ramp Sections (Washington, DC: 2025). Data set: HPMS Spatial Ramp Sections - 2024 (https://datahub.transportation.gov/Roadways-and-Bridges/HPMS-Spatial-Ramp-Sections-2024/phpr-iuzz/). Generated 2025-11-14. Public domain. Contact: PolicyInfoFeedback@dot.gov
 
 ## Formal citations
 - APA 
 
-	U.S. Federal Highway Administration, Office of Highway Policy Information. (2025). HPMS Spatial Federal-Aid Sections - 2024 (https://datahub.transportation.gov/Roadways-and-Bridges/HPMS-Spatial-Federal-Aid-Sections-2024/tf8u-hrm4/) [Data set]. Generated 2025-11-14. Public domain. Contact: PolicyInfoFeedback@dot.gov
+	U.S. Federal Highway Administration, Office of Highway Policy Information. (2025). HPMS Spatial Ramp Sections - 2024 (https://datahub.transportation.gov/Roadways-and-Bridges/HPMS-Spatial-Ramp-Sections-2024/phpr-iuzz/) [Data set]. Generated 2025-11-14. Public domain. Contact: PolicyInfoFeedback@dot.gov
 
 - MLA 
 
-	U.S. Federal Highway Administration, Office of Highway Policy Information. HPMS Spatial Federal-Aid Sections - 2024, U.S. Federal Highway Administration, 14 Nov. 2025. Public domain. SHA-256: Accessed [DATE]. PolicyInfoFeedback@dot.gov.
+	U.S. Federal Highway Administration, Office of Highway Policy Information. HPMS Spatial Ramp Sections - 2024, U.S. Federal Highway Administration, 14 Nov. 2025. Public domain. SHA-256: Accessed [DATE]. PolicyInfoFeedback@dot.gov.
 
 - Chicago (Author-Date) 
 
-	U.S. Federal Highway Administration, Office of Highway Policy Information. 2025. "HPMS Spatial Federal-Aid Sections - 2024" U.S. Federal Highway Administration. Generated November 14, 2025. Public domain. (Accessed [Month Day, Year]).
+	U.S. Federal Highway Administration, Office of Highway Policy Information. 2025. "HPMS Spatial Ramp Sections - 2024" U.S. Federal Highway Administration. Generated November 14, 2025. Public domain. (Accessed [Month Day, Year]).
 
 # License
 
