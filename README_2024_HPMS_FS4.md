@@ -1,37 +1,35 @@
 # Table of Contents
 1. Summary
 2. Dataset Summary
-3. Files in this Package
-4. Provenance & Source
-5. Spatial Reference / CRS
-6. Geometry
-7. Attributes / Metadata Fields
-8. Data Specifications
-9. Data Types & Casting
-10. Usage
-11. Known Limitations & Caveats
+3. Provenance & Source
+4. Spatial Reference / CRS
+5. Geometry
+6. Attributes / Metadata Fields
+7. Data Specifications
+8. Data Types & Casting
+9. Usage
+10. Known Limitations & Caveats
+11. Disclaimers
 12. Reproducibility / Script Reference
 13. Contact
-14. License
+14. Citation
+15. License
 
 # Summary
-This README describes the 2024_HPMS_FS4.geojson export produced by an R script that extracts State Minor Arterial (FSystem_VN = 4) Highway Performance Monitoring System (HPMS) records for DataYear = 2024 from an SQL Server database, converts the WKB/EWKB geometry to an sf object, and writes spatial outputs (GeoJSON, KML, KMZ). This README accompanies the GeoJSON output and documents metadata, provenance, usage, and known limitations.
+This README describes a filtered view of the 2024 HPMS Spatial All Sections data with only Minor Arterial sections from the 2024 Highway Performance Monitoring System (HPMS) attached to the All Road Network of Linear Referenced Data (ARNOLD) network.  The source file was produced using what is known as the “Spatial Full Join” process in HPMS, which is a spatial dynamic segmentation of the HPMS data to create homogeneous roadway sections.  To be included in the file, only one data item (not including StateId, RouteId, BeginPoint, EndPoint, SRID, and Year_Record) must be present on a section of road.  See attached README file for more details.  In addition to the Minor Arterial filter (F_System = 4), the data was also filtered to remove any roadway sections restricted to the public (Is_Restricted = 1), sections with missing urban IDs (Urban_ID = 0 or null), and sections identified as a ramp, non-mainline, or planned/unbuilt (Facility_Type = 4, 5, and 7 respectively).  Please note that this view does include data on the non-Inventory direction (Facility_Type = 6), which should be excluded if developing summary statistics, such as total mileages. Failure to exclude the non-inventory direction will result in doubling derived values.  The user is encouraged to reach out to PolicyInfoFeedback@dot.gov with any data or data analysis questions or concerns.
 
 # Dataset summary
-- URL: https://datahub.transportation.gov/Roadways-and-Bridges/HPMS-Spatial-Minor-Arterial-Sections-2024/jdq7-ymd2/
-- Feature count: 1,877,692 observations (rows)
-- File size: 4.07 GB
-- Generated: 2025-10-02
-- Version: 2024_HPMS_FS4 v1
-- SHA-256 checksum of GeoJSON: 16e8bd2b9eb3800e7ec04fa0447247bcda9a3a481a0ef32c480259cb17b5b4b2
-
-# Files in this package
-2024_HPMS_FS4.geojson - primary GeoJSON file containing HPMS features (LINESTRING) and attributes.
+- URL: https://datahub.transportation.gov/Roadways-and-Bridges/HPMS-Spatial-Minor-Arterial-Sections-2024/jjab-3wm6/
+- Feature count: 1,843,700 observations (rows)
+- File size: 888,874,769 bytes (CSV)
+- Generated: 2025-11-14
+- Source data: https://datahub.transportation.gov/Roadways-and-Bridges/HPMS-Spatial-All-Sections-2024/42um-tgh5/
+- SHA-256 checksum of source data GeoJSON: a730042bb766978cde6773b558354c55efd71db1744faafe38894db6d81b2713
 
 # Provenance & source
 - Source database: HPMS9 (SQL Server)
 - Source table: Gold.FullSpatialJoins (as queried by the R script)
-- Query filter: DataYear = 2024 AND FSystem_VN = 4
+- Query filter: DataYear = 2024 AND F_System = 4 AND Is_Restricted is NULL AND Urban_ID > 0 AND Facility_Type in (1, 2, 6) 
 - Query ordering: ORDER BY StateId, RouteId, BeginPoint
 - Geometry source: Shape.STAsBinary() (WKB/EWKB) and Shape.STSrid (SRID) from the database
 
@@ -40,11 +38,14 @@ CRS used when writing GeoJSON:
 If SRID was provided and consistent, the export script attempts to use the SRID found in the source data and, if present, preserves an SRID attribute for each feature. If SRID was missing or inconsistent across rows the script defaults to EPSG:4326. Verify the SRID attribute and reproject as needed for projection-sensitive analysis.
 
 # Geometry
-- Geometry type: LINESTRING (the script casts geometries to LINESTRING before writing).
-- Empty geometries: removed (rows with empty geometries are excluded).
-- WKB handling: EWKB-aware parsing was used (st_as_sfc(..., EWKB = TRUE)); the script handles raw WKB and hex-encoded text.
+- Input geometry: Source HPMS geometry are M-enabled ESRI polylines (e.g., PolylineM / LINESTRINGM).
+- Output geometry: LINESTRING (GeoJSON output does not include M values).
+- Empty/invalid geometries: Rows with empty or invalid geometries are excluded from the GeoJSON output. These rows are dropped silently.
+- WKB handling: EWKB-aware parsing is used (st_as_sfc(..., EWKB = TRUE)); the script handles raw WKB and hex-encoded WKB text.
+- Z values: HPMS data does not contain z values.
+- Coordinate Reference System (CRS): WGS84 (EPSG:4326)
 
-Note: The script comment indicates GeoJSON is written with "no M values" - M values are not included in HPMS and were not calculated for this export.
+Note: HPMS source data contains M values (measures) used for linear referencing; those M values are not included in this GeoJSON. For M-enabled state level HPMS geodatabase/feature-class files, see: https://data.transportation.gov/stories/s/3uu4-47sa
 
 # Attributes / Metadata fields
 The SQL query casts and returns a comprehensive set of HPMS attributes. The GeoJSON contains the following attributes (names as produced by the script), descriptions are from the HPMS Field Manual (link below):
@@ -155,28 +156,23 @@ The HPMS Field Manual is the data collection guidance for the state data provide
 The SQL in the script explicitly casts many fields to integer, decimal, or varchar types (see script for exact casts). Expect numeric columns (integers/doubles) and textual fields. If strict typing is required, inspect a sample of attributes in R or a GIS tool.
 
 # Usage
-Mapping and analyzing roadway inventory, attributes, conditions, and usage, of the Minor Arterial system.  The sample data are included and can be expanded and analyzed where full-extent data are not available. It is recommended that the user consult the HPMS Field Manual on how to do this, or reach out to the FHWA, Office of Highway Policy Information for assistance. It is generally, not advised to compare states, especially using the sampled data items since the collection and reporting of these data can vary from state to state.
-
-Load in GIS software (QGIS, ArcGIS) or programmatically (GeoPandas, sf in R).
-
-Typical R example:
-- library(sf)
-- sf <- st_read("2024_HPMS_FS4.geojson")
-
-Typical Python (GeoPandas) example:
-- import geopandas as gpd
-- gdf = gpd.read_file("2024_HPMS_FS4.geojson")
+Mapping and analyzing roadway inventory, attributes, conditions, and usage, of the Federal-Aid system.  The sample data are included and can be expanded and analyzed where full-extent data are not available. It is recommended that the user consult the HPMS Field Manual on how to do this, or reach out to the FHWA, Office of Highway Policy Information for assistance. It is generally, not advised to compare states, especially using the sampled data items since the collection and reporting of these data can vary from state to state.
 
 # Known limitations & caveats
-- SRID selection: the script uses the first non-NA SRID found in the SRID column; if multiple SRIDs are present across rows results may not be consistent. Validate SRID consistency before using geometry for precise analysis.
-- Geometry casting: geometries are cast to LINESTRING. If the source contains other geometry types (MULTILINESTRING, GEOMETRYCOLLECTION), casting may alter structure or drop parts. Inspect sample rows if source geometry variability is suspected.
 - M values: M values are not calculated in the GeoJSON export.
 - Attribute name modifications: the KML export applies name cleaning/truncation. The GeoJSON should retain original names, but verify if your workflow requires exact original column names.
 - Geospatial overlaps are known to exist in some state provided data and are not changed or corrected by HPMS. While this is not an extensive problem, it may be present in this file.
 - Users wanting to replicate the data in the FHWA publication Highway Statistics, should be aware that some data items are not provided for rural Minor Collectors and all Local roads.  These data will need to be pulled from the appropriate summary table available on the Data Access for HPMS site at: https://data.transportation.gov/stories/s/3uu4-47sa.
+- The data may contain physical spatial gaps. These gaps may be errors created at the source (e.g. during the original digitization of the ARNOLD network) or during data processing in the HPMS application. Gaps created during data processing can occur when there is no reported tabular data to support the ARNOLD network at the location of the gap.
+- The data may contain overlapping ARNOLD network (geometry) features that contain different Route IDs, which are not changed or corrected by HPMS. These overlapping features are most prevalent on roadways not owned by a state agency and locations with concurrently running highway numbers. There are also locations where states provide overlapping features that represent the inventory and non-inventory direction.
+- Curve Classification, Grade Classification, counts of intersection types, and any data item describing intersection geometry or operations should be used with caution when analyzing the Full Join. These items describe the entire sample section or the controlling intersection within that sample as indicated by the associated Sample ID. When these data items are intersected and normalized to create the Full Join, their values will appear within a single homogeneous record that is only a piece of the overall Sample Section. However, they represent the entire Sample Section, which can consist of multiple homogeneous records. Treat the Full Join values for the described data items as aggregates that summarize across the full Sample Section rather than as a single, indivisible observation.
+
+# Disclaimers
+- Unless otherwise stated, all data, metadata and related materials are considered to satisfy the quality standards relative to the purpose for which the data were collected. Although these data and associated metadata have been reviewed for accuracy and completeness and approved for release by the Federal Highway Administration (FHWA), no warranty expressed or implied is made regarding the display or utility of the data for other purposes, nor on all computer systems, nor shall the act of distribution constitute any such warranty.
+- This data has been approved for release by the Federal Highway Administration (FHWA). Although this data has been subjected to rigorous review and is substantially complete, the FHWA reserves the right to revise the data pursuant to further analysis and review. Furthermore, the data is released on condition that neither the FHWA nor the U.S. Government shall be held liable for any damages resulting from its authorized or unauthorized use.
 
 # Reproducibility / script reference
-The outputs were produced by an R script that:
+The outputs source data for the were produced by an R script that:
 - Connects via DBI + odbc to SQL Server
 - Runs the SQL SELECT query (explicit casts) pulling Shape.STAsBinary() and Shape.STSrid
 - Converts WKB to sfc using st_as_sfc(..., EWKB = TRUE) (handling raw and hex encodings)
@@ -190,20 +186,20 @@ FHWA, Office of Highway Policy Information. For dataset-specific questions, cont
 If you use these HPMS data files in a publication, report, or presentation, please cite them as follows.
 
 ## Recommended citation
-- U.S. Department of Transportation, Federal Highway Administration, Office of Highway Policy Information: 2024 Highway Performance Monitoring System (HPMS) Interstate Sections (Washington, DC: 2025). Data set: 2024_HPMS_FS4.geojson (Version 2024_HPMS_FS4 v1). Generated 2025-10-02. Public domain. SHA-256: 16e8bd2b9eb3800e7ec04fa0447247bcda9a3a481a0ef32c480259cb17b5b4b2. Contact: PolicyInfoFeedback@dot.gov
+- U.S. Department of Transportation, Federal Highway Administration, Office of Highway Policy Information: 2024 Highway Performance Monitoring System (HPMS) Minor Arterial Sections (Washington, DC: 2025). Data set: HPMS Spatial Minor Arterial Sections - 2024 (https://datahub.transportation.gov/Roadways-and-Bridges/HPMS-Spatial-Minor-Arterial-Sections-2024/jjab-3wm6/). Generated 2025-11-12. Public domain. Contact: PolicyInfoFeedback@dot.gov
 
 ## Formal citations
 - APA 
 
-	U.S. Federal Highway Administration, Office of Highway Policy Information. (2025). 2024_HPMS_FS4.geojson (Version 2024_HPMS_FS4 v1) [Data set]. Generated 2025-10-02. Public domain. SHA-256: 16e8bd2b9eb3800e7ec04fa0447247bcda9a3a481a0ef32c480259cb17b5b4b2. Contact: PolicyInfoFeedback@dot.gov
+	U.S. Federal Highway Administration, Office of Highway Policy Information. (2025). HPMS Spatial Minor Arterial Sections - 2024 (https://datahub.transportation.gov/Roadways-and-Bridges/HPMS-Spatial-Minor-Arterial-Sections-2024/jjab-3wm6/) [Data set]. Generated 2025-11-10. Public domain. Contact: PolicyInfoFeedback@dot.gov
 
 - MLA 
 
-	U.S. Federal Highway Administration, Office of Highway Policy Information. 2024_HPMS_FS4.geojson. Version 2024_HPMS_FS4 v1, U.S. Federal Highway Administration, 02 Oct. 2025. Public domain. SHA-256: 16e8bd2b9eb3800e7ec04fa0447247bcda9a3a481a0ef32c480259cb17b5b4b2. Accessed [DATE]. PolicyInfoFeedback@dot.gov .
+	U.S. Federal Highway Administration, Office of Highway Policy Information. HPMS Spatial Minor Arterial Sections - 2024, U.S. Federal Highway Administration, 10 Nov. 2025. Public domain. SHA-256: Accessed [DATE]. PolicyInfoFeedback@dot.gov.
 
 - Chicago (Author-Date) 
 
-	U.S. Federal Highway Administration, Office of Highway Policy Information. 2025. "2024_HPMS_FS4.geojson." Version 2024_HPMS_FS4 v1. U.S. Federal Highway Administration. Generated October 2, 2025. Public domain. SHA-256: 16e8bd2b9eb3800e7ec04fa0447247bcda9a3a481a0ef32c480259cb17b5b4b2. (Accessed [Month Day, Year]).
+	U.S. Federal Highway Administration, Office of Highway Policy Information. 2025. "HPMS Spatial Minor Arterial Sections - 2024" U.S. Federal Highway Administration. Generated November 12, 2025. Public domain. (Accessed [Month Day, Year]).
 
 # License
 
