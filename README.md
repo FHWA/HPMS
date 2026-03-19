@@ -1,7 +1,7 @@
 # HPMS
 
 ## Highway Performance Monitoring System Archives
-- This repository stores Federal Highway Administration, HPMS dataset metadata organized by year and data subset.
+- This repository stores Federal Highway Administration, HPMS related Python script and dataset metadata organized by year and data subset.
 
 ## Contact and license
 - U.S. Department of Transportation, Federal Highway Administration, Office of Highway Policy Information, Highway System Performance Division
