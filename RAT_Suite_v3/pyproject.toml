@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hpms-rat-suite"
+version = "3.0.0"
+description = "Federal Highway Administration (FHWA) HPMS Roadway Alignment Tool (RAT) Suite."
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "CC0 1.0 Universal"}
+authors = [
+  {name = "Federal Highway Administration (FHWA)"}
+]
+dependencies = [
+    "pandas",
+    "geopandas",
+    "shapely",
+    "scipy",
+    "rasterio",
+    "pyproj",
+    "folium",
+    "matplotlib",
+    "requests",
+    "Pillow"
+]
