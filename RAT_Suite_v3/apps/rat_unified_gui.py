@@ -68,7 +68,13 @@ class RATUnifiedGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("RAT Unified GUI Runner")
-        self.root.geometry("1120x980")
+        # Fit window to screen size with some margin
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        w = min(1120, sw - 40)
+        h = min(980, sh - 80)
+        self.root.geometry(f"{w}x{h}")
+        self.root.resizable(True, True)
         self.root.configure(bg="#E0E0E0")
 
         self.vars = {
@@ -145,8 +151,28 @@ class RATUnifiedGUI:
         self.logger.setLevel(logging.INFO)
 
     def _build_ui(self):
-        main = ttk.Frame(self.root, padding=12)
-        main.pack(fill=tk.BOTH, expand=True)
+        # Scrollable canvas wrapper
+        canvas = tk.Canvas(self.root, bg="#E0E0E0", highlightthickness=0)
+        scrollbar = ttk.Scrollbar(self.root, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        main = ttk.Frame(canvas, padding=12)
+        canvas_window = canvas.create_window((0, 0), window=main, anchor="nw")
+
+        def on_frame_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def on_canvas_configure(event):
+            canvas.itemconfig(canvas_window, width=event.width)
+
+        main.bind("<Configure>", on_frame_configure)
+        canvas.bind("<Configure>", on_canvas_configure)
+
+        # Mouse wheel scrolling
+        def on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        canvas.bind_all("<MouseWheel>", on_mousewheel)
 
         # 1) Input source
         lf_input = ttk.LabelFrame(main, text="1) Input Source", padding=12)
