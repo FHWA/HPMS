@@ -78,31 +78,44 @@ def load_local_hpms(path: str) -> pd.DataFrame:
             gdf = gdf.to_crs(epsg=4326)
         df = pd.DataFrame(gdf.drop(columns="geometry"))
         df["WKT"] = gdf["geometry"].apply(lambda g: g.wkt if g else None)
-    # fuzzy rename for common schemas
+    
+    # fuzzy rename
     col_map = {}
     for col in df.columns:
         c = col.lower()
-        if c in ["route_id", "routeid", "route", "id", "route_num", "rte_id"]:
+        if c in ["route_id", "routeid", "route", "id"]:
             col_map[col] = "RouteId"
-        elif c in ["begin_point", "start_mp", "bmp", "begin", "beg_mp", "from_mp"]:
+        elif c in ["begin_point", "start_mp", "bmp", "begin", "beg_mp"]:
             col_map[col] = "Start_MP"
-        elif c in ["end_point", "end_mp", "emp", "end", "to_mp"]:
+        elif c in ["end_point", "end_mp", "emp", "end"]:
             col_map[col] = "End_MP"
+        elif c in ["f_system", "fsystem", "func_sys"]:
+            col_map[col] = "FSystem"
+        elif c in ["urban_id", "urbanid", "urban_code"]:
+            col_map[col] = "UrbanID"
     df.rename(columns=col_map, inplace=True)
+
     # required fields
     if "RouteId" not in df.columns:
         raise ValueError("Missing RouteId column after normalization.")
     if "WKT" not in df.columns:
         raise ValueError("Missing geometry/WKT column after normalization.")
-    # defaults for optional MP fields
-    if "Start_MP" not in df.columns:
-        df["Start_MP"] = 0.0
-    if "End_MP" not in df.columns:
-        df["End_MP"] = 0.0
+
+    # normalization & defaults
+    if "Start_MP" not in df.columns: df["Start_MP"] = 0.0
+    if "End_MP" not in df.columns: df["End_MP"] = 0.0
+    if "FSystem" not in df.columns: df["FSystem"] = 1
+    if "UrbanID" not in df.columns: df["UrbanID"] = 99999
+
     df["RouteId"] = df["RouteId"].astype(str).str.strip().str.upper()
     df["Start_MP"] = pd.to_numeric(df["Start_MP"], errors="coerce").fillna(0.0)
     df["End_MP"] = pd.to_numeric(df["End_MP"], errors="coerce").fillna(0.0)
-    # drop null/empty geometries
+    df["FSystem"] = pd.to_numeric(df["FSystem"], errors="coerce").fillna(1).astype(int)
+    
+    df["UrbanID"] = pd.to_numeric(df["UrbanID"], errors="coerce").fillna(99999)
+    df["Is_Urban"] = (df["UrbanID"] != 99999) & (df["UrbanID"] != 0)
+
+    # drop bad geometry
     df["WKT"] = df["WKT"].astype(str).str.strip()
     df = df[df["WKT"].notna() & (df["WKT"] != "")].copy()
     return df
@@ -224,44 +237,53 @@ def main():
             raise ValueError("No geometry overlaps the requested start/end RP range.")
     logging.info(f"Rows for route {route_norm}: {len(sub):,}")
     download_dems(sub["WKT"].tolist(), args.demdir)
-    lines = stitch_linestrings_ordered(sub["WKT"].tolist())
-    if not lines:
+    
+    # Identify contiguous blocks
+    sub['block'] = (sub[['FSystem', 'Is_Urban']] != sub[['FSystem', 'Is_Urban']].shift()).any(axis=1).cumsum()
+    
+    all_chunks = []
+    for block_id, chunk in sub.groupby('block'):
+        f_sys = int(chunk["FSystem"].iloc[0])
+        is_urban = bool(chunk["Is_Urban"].iloc[0])
+        lines = stitch_linestrings_ordered(chunk["WKT"].tolist())
+        for g in lines:
+            all_chunks.append({"geom": g, "f_sys": f_sys, "is_urban": is_urban})
+
+    if not all_chunks:
         raise ValueError("No valid stitched geometry found.")
-    # --- FIX 1: Calculate Total UTM Length in Meters for all chunks ---
+
     total_stitch_len_m = 0.0
-    chunk_lengths_m = []
-    for g in lines:
-        lon, lat = g.coords[0]
+    for info in all_chunks:
+        lon, lat = info["geom"].coords[0]
         utm = get_appropriate_utm_zone(lon, lat)
         proj = Transformer.from_crs("EPSG:4326", f"EPSG:{utm}", always_xy=True)
-        coords_m = [proj.transform(x, y) for x, y in g.coords]
-        length_m = LineString(coords_m).length
-        chunk_lengths_m.append(length_m)
-        total_stitch_len_m += length_m
+        coords_m = [proj.transform(x, y) for x, y in info["geom"].coords]
+        info["length_m"] = LineString(coords_m).length
+        total_stitch_len_m += info["length_m"]
+
     if total_stitch_len_m == 0: total_stitch_len_m = 1.0
+    
     route_s_mp = float(args.start) if args.start is not None else float(sub["Start_MP"].min())
     route_e_mp = float(args.end) if args.end is not None else float(sub["End_MP"].max())
     
-    all_h = []
-    all_v = []
-    all_vtx_dfs = []
-    
+    all_h, all_v, all_vtx_dfs = [], [], []
     cumulative_stitch_dist_m = 0.0
-    global_continuous_dist_m = 0.0 # Tracks plotting X-axis across all chunks
-    # --- FIX 2: Loop through ALL chunks, proportionally allocating RPs via Meters ---
-    for idx, main_geom in enumerate(lines):
-        chunk_length_m = chunk_lengths_m[idx]
+    global_continuous_dist_m = 0.0 
+
+    for idx, info in enumerate(all_chunks):
+        chunk_length_m = info["length_m"]
         chunk_s_mp = route_s_mp + ((cumulative_stitch_dist_m / total_stitch_len_m) * (route_e_mp - route_s_mp))
         cumulative_stitch_dist_m += chunk_length_m
         chunk_e_mp = route_s_mp + ((cumulative_stitch_dist_m / total_stitch_len_m) * (route_e_mp - route_s_mp))
-        res = smooth_plan_profile_from_linestring(main_geom, args.demdir, params)
+        
+        res = smooth_plan_profile_from_linestring(info["geom"], args.demdir, params, info["f_sys"], info["is_urban"])
         if res is None:
             continue
         spacing_m = res["spacing_m"]
-        h = analyze_horizontal_curvature(res["coords_m_smooth"], spacing_m, params)
+        h = analyze_horizontal_curvature(res["coords_m_smooth"], spacing_m, params, info["is_urban"])
         if params.get("ENABLE_MERGE", False):
             h = merge_horizontal_curves(h, params)
-        v = analyze_vertical_parabolic(res["z_smooth"], spacing_m, params)
+        v = analyze_vertical_parabolic(res["z_smooth"], spacing_m, params, info["is_urban"])
         total_len = max(float(res["d_axis"][-1]), 1.0)
         for c in h:
             c["RouteId"] = route_norm

@@ -63,6 +63,8 @@ def load_local_hpms(path: str) -> pd.DataFrame:
             gdf = gdf.to_crs(epsg=4326)
         df = pd.DataFrame(gdf.drop(columns="geometry"))
         df["WKT"] = gdf["geometry"].apply(lambda g: g.wkt if g else None)
+    
+    # fuzzy rename
     col_map = {}
     for col in df.columns:
         c = col.lower()
@@ -72,17 +74,35 @@ def load_local_hpms(path: str) -> pd.DataFrame:
             col_map[col] = "Start_MP"
         elif c in ["end_point", "end_mp", "emp", "end"]:
             col_map[col] = "End_MP"
+        elif c in ["f_system", "fsystem", "func_sys"]:
+            col_map[col] = "FSystem"
+        elif c in ["urban_id", "urbanid", "urban_code"]:
+            col_map[col] = "UrbanID"
     df.rename(columns=col_map, inplace=True)
+
+    # required fields
     if "RouteId" not in df.columns:
-        raise ValueError("No RouteId field found.")
-    if "Start_MP" not in df.columns:
-        df["Start_MP"] = 0.0
-    if "End_MP" not in df.columns:
-        df["End_MP"] = 0.0
-    df["RouteId"] = df["RouteId"].astype(str).str.strip()
+        raise ValueError("Missing RouteId column after normalization.")
+    if "WKT" not in df.columns:
+        raise ValueError("Missing geometry/WKT column after normalization.")
+
+    # normalization & defaults
+    if "Start_MP" not in df.columns: df["Start_MP"] = 0.0
+    if "End_MP" not in df.columns: df["End_MP"] = 0.0
+    if "FSystem" not in df.columns: df["FSystem"] = 1
+    if "UrbanID" not in df.columns: df["UrbanID"] = 99999
+
+    df["RouteId"] = df["RouteId"].astype(str).str.strip().str.upper()
     df["Start_MP"] = pd.to_numeric(df["Start_MP"], errors="coerce").fillna(0.0)
     df["End_MP"] = pd.to_numeric(df["End_MP"], errors="coerce").fillna(0.0)
-    df = df.dropna(subset=["WKT"]).copy()
+    df["FSystem"] = pd.to_numeric(df["FSystem"], errors="coerce").fillna(1).astype(int)
+    
+    df["UrbanID"] = pd.to_numeric(df["UrbanID"], errors="coerce").fillna(99999)
+    df["Is_Urban"] = (df["UrbanID"] != 99999) & (df["UrbanID"] != 0)
+
+    # drop bad geometry
+    df["WKT"] = df["WKT"].astype(str).str.strip()
+    df = df[df["WKT"].notna() & (df["WKT"] != "")].copy()
     return df
 
 def main():
@@ -111,16 +131,22 @@ def main():
         download_dems(sub["WKT"].tolist(), args.demdir)
         
         # --- 2. Build the smooth Macro Profile ---
-        lines = stitch_linestrings_ordered(sub["WKT"].tolist())
-        if not lines:
-            continue
+        sub['block'] = (sub[['FSystem', 'Is_Urban']] != sub[['FSystem', 'Is_Urban']].shift()).any(axis=1).cumsum()
+        
         macro_coords_wgs = []
         macro_z_vals = []
-        for line in lines:
-            chunk_res = smooth_plan_profile_from_linestring(line, args.demdir, params)
-            if chunk_res is not None:
-                macro_coords_wgs.extend(chunk_res["coords_wgs_smooth"])
-                macro_z_vals.extend(chunk_res["z_smooth"])
+        
+        for block_id, chunk in sub.groupby('block'):
+            f_sys = int(chunk["FSystem"].iloc[0])
+            is_urban = bool(chunk["Is_Urban"].iloc[0])
+            lines = stitch_linestrings_ordered(chunk["WKT"].tolist())
+            
+            for line in lines:
+                chunk_res = smooth_plan_profile_from_linestring(line, args.demdir, params, f_sys, is_urban)
+                if chunk_res is not None:
+                    macro_coords_wgs.extend(chunk_res["coords_wgs_smooth"])
+                    macro_z_vals.extend(chunk_res["z_smooth"])
+                    
         if not macro_coords_wgs:
             continue
         tree, tx = build_metric_kdtree(macro_coords_wgs)

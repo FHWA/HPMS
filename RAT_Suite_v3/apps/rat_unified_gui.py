@@ -133,12 +133,24 @@ class RATUnifiedGUI:
             "TREND_WINDOW_FT": tk.StringVar(value="1000"),
             "DIP_THRESHOLD_FT": tk.StringVar(value="6.5"),
             "BRIDGE_MAX_LEN_FT": tk.StringVar(value="8200"),
+            "H_MIN_CURVE_LENGTH_URBAN_FT": tk.StringVar(value="50.0"),
+            "H_MIN_DELTA_URBAN": tk.StringVar(value="5.0"),
+            "V_MIN_CURVE_LENGTH_URBAN_FT": tk.StringVar(value="80.0"),
+            "V_MIN_GRADE_CHANGE_URBAN": tk.StringVar(value="1.0"),
             "H_SMOOTH_FACTOR_FS3": tk.IntVar(value="4000"),
             "V_SMOOTH_FACTOR_FS3": tk.IntVar(value="4000"),
             "H_SMOOTH_FACTOR_FS45": tk.IntVar(value="2500"),
             "V_SMOOTH_FACTOR_FS45": tk.IntVar(value="2500"),
             "H_SMOOTH_FACTOR_FS67": tk.IntVar(value="1000"),
             "V_SMOOTH_FACTOR_FS67": tk.IntVar(value="1000"),
+            "H_SMOOTH_FACTOR_FS12_URBAN": tk.IntVar(value="4500"),
+            "V_SMOOTH_FACTOR_FS12_URBAN": tk.IntVar(value="4500"),
+            "H_SMOOTH_FACTOR_FS3_URBAN": tk.IntVar(value="500"),
+            "V_SMOOTH_FACTOR_FS3_URBAN": tk.IntVar(value="500"),
+            "H_SMOOTH_FACTOR_FS45_URBAN": tk.IntVar(value="100"),
+            "V_SMOOTH_FACTOR_FS45_URBAN": tk.IntVar(value="100"),
+            "H_SMOOTH_FACTOR_FS67_URBAN": tk.IntVar(value="50"),
+            "V_SMOOTH_FACTOR_FS67_URBAN": tk.IntVar(value="50"),
         }
 
         self._build_ui()
@@ -406,13 +418,19 @@ class RATUnifiedGUI:
 
         adv_h_keys = [
             "H_BASE_SMOOTH_WINDOW", "H_MIN_HEAD_CHANGE", "H_MAX_RADIUS_FT",
-            "H_SMOOTH_FACTOR_FS3", "H_SMOOTH_FACTOR_FS45", "H_SMOOTH_FACTOR_FS67"
+            "H_SMOOTH_FACTOR_FS3", "H_SMOOTH_FACTOR_FS45", "H_SMOOTH_FACTOR_FS67",
+            "H_MIN_CURVE_LENGTH_URBAN_FT", "H_MIN_DELTA_URBAN", 
+            "H_SMOOTH_FACTOR_FS12_URBAN", "H_SMOOTH_FACTOR_FS3_URBAN", 
+            "H_SMOOTH_FACTOR_FS45_URBAN", "H_SMOOTH_FACTOR_FS67_URBAN"
         ]
        
         adv_v_keys = [
             "V_VC_THRESHOLD", "V_GAP_TOLERANCE", "V_MIN_OFFSET_FT", "V_REVERSAL_TOLERANCE",
             "REGRESSION_WINDOW_FT", "TREND_WINDOW_FT", "DIP_THRESHOLD_FT", "BRIDGE_MAX_LEN_FT",
-            "V_SMOOTH_FACTOR_FS3", "V_SMOOTH_FACTOR_FS45", "V_SMOOTH_FACTOR_FS67"
+            "V_SMOOTH_FACTOR_FS3", "V_SMOOTH_FACTOR_FS45", "V_SMOOTH_FACTOR_FS67",
+            "V_MIN_CURVE_LENGTH_URBAN_FT", "V_MIN_GRADE_CHANGE_URBAN",
+            "V_SMOOTH_FACTOR_FS12_URBAN", "V_SMOOTH_FACTOR_FS3_URBAN",
+            "V_SMOOTH_FACTOR_FS45_URBAN", "V_SMOOTH_FACTOR_FS67_URBAN"
         ]
 
         grp_h = ttk.LabelFrame(form, text="Advanced Horizontal", padding=10)
@@ -574,12 +592,24 @@ class RATUnifiedGUI:
             "TREND_WINDOW_FT": "1000",
             "DIP_THRESHOLD_FT": "6.5",
             "BRIDGE_MAX_LEN_FT": "8200",
+            'H_MIN_CURVE_LENGTH_URBAN_FT': 50.0,
+            'H_MIN_DELTA_URBAN': 5.0,
+            'V_MIN_CURVE_LENGTH_URBAN_FT': 80.0,
+            'V_MIN_GRADE_CHANGE_URBAN': 1.0,
             "H_SMOOTH_FACTOR_FS3": "4000",
             "V_SMOOTH_FACTOR_FS3": "4000",
             "H_SMOOTH_FACTOR_FS45": "2500",
             "V_SMOOTH_FACTOR_FS45": "2500",
             "H_SMOOTH_FACTOR_FS67": "1000",
-            "V_SMOOTH_FACTOR_FS67": "1000"
+            "V_SMOOTH_FACTOR_FS67": "1000",
+            "H_SMOOTH_FACTOR_FS12_URBAN": "2500",
+            "V_SMOOTH_FACTOR_FS12_URBAN": "2500",
+            "H_SMOOTH_FACTOR_FS3_URBAN": "500",
+            "V_SMOOTH_FACTOR_FS3_URBAN": "500",
+            "H_SMOOTH_FACTOR_FS45_URBAN": "100",
+            "V_SMOOTH_FACTOR_FS45_URBAN": "100",
+            "H_SMOOTH_FACTOR_FS67_URBAN": "50",
+            "V_SMOOTH_FACTOR_FS67_URBAN": "50"
         }
         for k, v in adv_defaults.items():
             if k in self.advanced_defaults:
