@@ -315,8 +315,8 @@ Because the RAT Suite applies strict mathematical models to highly variable, hum
 | `DENSIFY_SPACING_FT` | 10 | ft | Interpolation interval before analytics |
 | `H_SMOOTH_FACTOR` | 4500 | ft | Horizontal stiffness (FS 1–2 baseline) |
 | `V_SMOOTH_FACTOR` | 4500 | ft | Vertical smoothing stiffness (FS 1–2 baseline) |
-| `H_SMOOTH_FACTOR_FS12_URBAN` | 4500 | factor | Horizontal stiffness override for urban boundaries |
-| `V_SMOOTH_FACTOR_FS12_URBAN` | 4500 | factor | Vertical stiffness override for urban boundaries |
+| `H_SMOOTH_FACTOR_FS12_URBAN` | 4500 | ft | Horizontal stiffness override for urban boundaries |
+| `V_SMOOTH_FACTOR_FS12_URBAN` | 4500 | ft | Vertical stiffness override for urban boundaries |
 | `H_BASE_SMOOTH_WINDOW` | 21 | points | Heading smoothing window |
 
 ### Table 2: Horizontal Curve Detection
