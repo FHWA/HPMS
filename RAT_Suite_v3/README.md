@@ -14,11 +14,31 @@ The suite has been refactored into distinct, specialized modules:
 5. **HPMS 4D Enricher (`hpms_4d_enricher_cli.py`):** Transforms flat 2D HPMS linework into continuous 3D/4D linestrings (XYZM) by snapping tabular rows to a macro-profile, accurately bridging rivers and gaps.
 
 ## Installation
-1. Extract the RAT Suite folder to your local machine.
-2. Ensure you have Python 3.8+ installed. *(Note: Due to the heavy C++ geospatial libraries required, using **Miniconda** or **Anaconda** is highly recommended on Windows).*
-3. Install the required dependencies using pip:
+
+The RAT Suite uses modern Python packaging via `pyproject.toml`. To install the suite and its dependencies, follow these steps:
+
+1. **Clone the repository:**
    ```bash
-   pip install -r requirements.txt
+   git clone <repository_url>
+   cd <repository_directory>
+   ```
+
+2. **Create a virtual environment (Recommended):**
+   ```bash
+   python -m venv venv
+   ```
+   * **On macOS and Linux:**
+     ```bash
+     source venv/bin/activate
+     ```
+   * **On Windows:**
+     ```bash
+     venv\Scripts\activate
+     ```
+
+3. **Install the suite:**
+   ```bash
+   pip install .
    ```
 
 ## Quick Start Guide
