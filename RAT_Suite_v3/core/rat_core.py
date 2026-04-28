@@ -50,18 +50,18 @@ METRIC_R_TO_IMPERIAL_D = 1746.38  # deg per 100 ft from radius(m): D = 1746.38/R
 DEFAULTS = {
     # canonical internals are metric
     'DENSIFY_SPACING_FT': 10.0,
-    'H_SMOOTH_FACTOR': 4500,
+    'H_SMOOTH_FACTOR': 4500,            # Functional systems 1 and 2
     'H_BASE_SMOOTH_WINDOW': 21,
     'H_MIN_HEAD_CHANGE': 0.003,
-    'H_MIN_DELTA': 3.5,
-    'H_MIN_CURVE_LENGTH_FT': 100.0,
+    'H_MIN_DELTA': 3.5,                 # Rural
+    'H_MIN_CURVE_LENGTH_FT': 100.0,     # Rural
     'H_MAX_RADIUS_FT': 165000.0,
     'H_LOOKAHEAD_DIST_M': 10.0,
-    'V_SMOOTH_FACTOR': 4500,
+    'V_SMOOTH_FACTOR': 4500,            # Functional systems 1 and 2
     'V_VC_THRESHOLD': 0.002,
-    'V_MIN_CURVE_LENGTH_FT': 200.0,
+    'V_MIN_CURVE_LENGTH_FT': 200.0,     # Rural
     'V_GAP_TOLERANCE': 5,
-    'V_MIN_GRADE_CHANGE': 0.5,
+    'V_MIN_GRADE_CHANGE': 0.5,          # Rural
     'V_MIN_OFFSET_FT': 0.10,
     'V_REVERSAL_TOLERANCE': 0.02,
     'REGRESSION_WINDOW_FT': 500.0,
@@ -71,6 +71,18 @@ DEFAULTS = {
     'ENABLE_MERGE': False,
     'MERGE_GAP_FT': 600.0,
     'V_MERGE_GAP_FT': 1500.0,
+    'H_MIN_CURVE_LENGTH_URBAN_FT': 50.0,
+    'H_MIN_DELTA_URBAN': 5.0,
+    'V_MIN_CURVE_LENGTH_URBAN_FT': 80.0,
+    'V_MIN_GRADE_CHANGE_URBAN': 1.0,
+    'H_SMOOTH_FACTOR_FS12_URBAN': 4500,
+    'V_SMOOTH_FACTOR_FS12_URBAN': 4500,
+    'H_SMOOTH_FACTOR_FS3_URBAN': 500,
+    'V_SMOOTH_FACTOR_FS3_URBAN': 500,
+    'H_SMOOTH_FACTOR_FS45_URBAN': 100,
+    'V_SMOOTH_FACTOR_FS45_URBAN': 100,
+    'H_SMOOTH_FACTOR_FS67_URBAN': 50,
+    'V_SMOOTH_FACTOR_FS67_URBAN': 50,
 }
 # -------------------------
 # Parameter normalization
@@ -95,8 +107,10 @@ def build_params(user_params: Optional[Dict] = None) -> Dict:
     # convert to metric canonical keys
     p['DENSIFY_SPACING_M'] = p.get('DENSIFY_SPACING_FT', 10.0) / FEET_PER_METER
     p['H_MIN_CURVE_LENGTH_M'] = p.get('H_MIN_CURVE_LENGTH_FT', 100.0) / FEET_PER_METER
+    p['H_MIN_CURVE_LENGTH_URBAN_M'] = p.get('H_MIN_CURVE_LENGTH_URBAN_FT', 50.0) / FEET_PER_METER
     p['H_MAX_RADIUS'] = p.get('H_MAX_RADIUS_FT', 165000.0) / FEET_PER_METER
     p['V_MIN_CURVE_LENGTH'] = p.get('V_MIN_CURVE_LENGTH_FT', 200.0) / FEET_PER_METER
+    p['V_MIN_CURVE_LENGTH_URBAN'] = p.get('V_MIN_CURVE_LENGTH_URBAN_FT', 80.0) / FEET_PER_METER
     p['REGRESSION_WINDOW_M'] = p.get('REGRESSION_WINDOW_FT', 500.0) / FEET_PER_METER
     p['TREND_WINDOW_M'] = p.get('TREND_WINDOW_FT', 1000.0) / FEET_PER_METER
     p['DIP_THRESHOLD_M'] = p.get('DIP_THRESHOLD_FT', 6.5) / FEET_PER_METER
@@ -289,7 +303,12 @@ def classify_grade_bin(pct: float) -> str:
 # -------------------------
 # Horizontal curve analysis (curvature-based)
 # -------------------------
-def analyze_horizontal_curvature(coords_m_smooth: List[Tuple[float, float]], spacing_m: float, params: Dict) -> List[Dict]:
+def analyze_horizontal_curvature(
+        coords_m_smooth: List[Tuple[float, float]], 
+        spacing_m: float, 
+        params: Dict,
+        is_urban: bool = False
+    ) -> List[Dict]:
     xs = np.array([c[0] for c in coords_m_smooth], dtype=float)
     ys = np.array([c[1] for c in coords_m_smooth], dtype=float)
     n = len(xs)
@@ -310,7 +329,9 @@ def analyze_horizontal_curvature(coords_m_smooth: List[Tuple[float, float]], spa
     # Curve if local radius below max radius
     kappa_thresh = 1.0 / max(params['H_MAX_RADIUS'], 1e-6)
     is_curve = kappa >= kappa_thresh
-    min_len = params['H_MIN_CURVE_LENGTH_M']
+    # min_len = params['H_MIN_CURVE_LENGTH_M']
+    min_len = params.get('H_MIN_CURVE_LENGTH_URBAN_M', 15.24) if is_urban else params['H_MIN_CURVE_LENGTH_M']
+    min_delta = params.get('H_MIN_DELTA_URBAN', 5.0) if is_urban else params['H_MIN_DELTA']
     curves = []
     i = 0
     while i < n:
@@ -330,7 +351,7 @@ def analyze_horizontal_curvature(coords_m_smooth: List[Tuple[float, float]], spa
         # Deflection via headings
         headings = calculate_headings(list(zip(xs, ys)))
         delta = abs(headings[e] - headings[s])
-        if delta < params['H_MIN_DELTA']:
+        if delta < min_delta:
             continue
         seg_kappa = kappa[s:e+1]
         max_k = np.nanmax(seg_kappa) if len(seg_kappa) > 0 else 0.0
@@ -384,10 +405,17 @@ def merge_horizontal_curves(curves: List[Dict], params: Dict) -> List[Dict]:
 # -------------------------
 # Vertical curve analysis (parabolic fit)
 # -------------------------
-def analyze_vertical_parabolic(z_smooth: np.ndarray, spacing_m: float, params: Dict) -> List[Dict]:
+def analyze_vertical_parabolic(
+        z_smooth: np.ndarray, 
+        spacing_m: float, 
+        params: Dict,
+        is_urban: bool = False
+    ) -> List[Dict]:
     grads = np.gradient(z_smooth, spacing_m) * 100.0
     gchg = np.gradient(grads, spacing_m)
     is_vc = np.abs(gchg) > params['V_VC_THRESHOLD']
+    min_len = params.get('V_MIN_CURVE_LENGTH_URBAN', 24.38) if is_urban else params['V_MIN_CURVE_LENGTH']
+    min_g_change = params.get('V_MIN_GRADE_CHANGE_URBAN', 1.0) if is_urban else params['V_MIN_GRADE_CHANGE']
     curves = []
     n = len(z_smooth)
     i = 0
@@ -416,7 +444,7 @@ def analyze_vertical_parabolic(z_smooth: np.ndarray, spacing_m: float, params: D
         if e <= s:
             continue
         length = (e - s) * spacing_m
-        if length < params['V_MIN_CURVE_LENGTH']:
+        if length < min_len:
             continue
         x = np.arange(s, e + 1) * spacing_m
         z = z_smooth[s:e + 1]
@@ -430,7 +458,7 @@ def analyze_vertical_parabolic(z_smooth: np.ndarray, spacing_m: float, params: D
         g1 = (2 * a * x[0] + b) * 100.0
         g2 = (2 * a * x[-1] + b) * 100.0
         A = g2 - g1
-        if abs(A) < params['V_MIN_GRADE_CHANGE']:
+        if abs(A) < min_g_change:
             continue
         K = length / abs(A) if abs(A) > 1e-6 else 999.0
         E_m = abs(A * length / 800.0)
@@ -461,7 +489,8 @@ def smooth_plan_profile_from_linestring(
         line: LineString, 
         dem_dir: str, 
         params: dict, 
-        f_sys: int = 1
+        f_sys: int = 1,
+        is_urban: bool = False
         ) -> dict:
     line_wgs = line
     lon, lat = line_wgs.coords[0]
@@ -476,17 +505,18 @@ def smooth_plan_profile_from_linestring(
     y_raw = np.array([c[1] for c in coords_m])
     # --- VARIABLE STIFFNESS LOGIC ---
     if f_sys in [1, 2]:
-        s_factor_h = params.get('H_SMOOTH_FACTOR', 4500)
-        s_factor_v = params.get('V_SMOOTH_FACTOR', 4500)
+        s_factor_h = params.get('H_SMOOTH_FACTOR_FS12_URBAN', 2500) if is_urban else params.get('H_SMOOTH_FACTOR', 4500)
+        s_factor_v = params.get('V_SMOOTH_FACTOR_FS12_URBAN', 2500) if is_urban else params.get('V_SMOOTH_FACTOR', 4500)
     elif f_sys == 3:
-        s_factor_h = params.get('H_SMOOTH_FACTOR_FS3', 4000)
-        s_factor_v = params.get('V_SMOOTH_FACTOR_FS3', 4000)
+        s_factor_h = params.get('H_SMOOTH_FACTOR_FS3_URBAN', 2000) if is_urban else params.get('H_SMOOTH_FACTOR_FS3', 4000)
+        s_factor_v = params.get('V_SMOOTH_FACTOR_FS3_URBAN', 2000) if is_urban else params.get('V_SMOOTH_FACTOR_FS3', 4000)
     elif f_sys in [4, 5]:
-        s_factor_h = params.get('H_SMOOTH_FACTOR_FS45', 2500)
-        s_factor_v = params.get('V_SMOOTH_FACTOR_FS45', 2500)
+        s_factor_h = params.get('H_SMOOTH_FACTOR_FS45_URBAN', 1200) if is_urban else params.get('H_SMOOTH_FACTOR_FS45', 2500)
+        s_factor_v = params.get('V_SMOOTH_FACTOR_FS45_URBAN', 1200) if is_urban else params.get('V_SMOOTH_FACTOR_FS45', 2500)
     else:
-        s_factor_h = params.get('H_SMOOTH_FACTOR_FS67', 1000)
-        s_factor_v = params.get('V_SMOOTH_FACTOR_FS67', 1000)
+        s_factor_h = params.get('H_SMOOTH_FACTOR_FS67_URBAN', 500) if is_urban else params.get('H_SMOOTH_FACTOR_FS67', 1000)
+        s_factor_v = params.get('V_SMOOTH_FACTOR_FS67_URBAN', 500) if is_urban else params.get('V_SMOOTH_FACTOR_FS67', 1000)
+
     spacing_m = LineString(coords_m).length / (len(coords_m) - 1)
     d_axis = np.arange(len(coords_m)) * spacing_m
     sx = UnivariateSpline(d_axis, x_raw, s=s_factor_h)
@@ -496,7 +526,7 @@ def smooth_plan_profile_from_linestring(
     z_raw = get_elevations(coords_wgs_smooth, dem_dir)
     z_filled = pd.Series(z_raw).interpolate(limit_direction='both').to_numpy()
     z_fixed = fix_profile_by_deviation(z_filled, spacing_m, params)
-    sz = UnivariateSpline(d_axis, z_filled, s=s_factor_v)
+    sz = UnivariateSpline(d_axis, z_fixed, s=s_factor_v)
     z_smooth = sz(d_axis)
     # optional heading smoothing (if needed elsewhere)
     h_unwrapped = calculate_headings(coords_m_smooth)
