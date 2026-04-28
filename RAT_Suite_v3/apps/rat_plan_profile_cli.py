@@ -289,10 +289,14 @@ def main():
             c["RouteId"] = route_norm
             c["Calibrated_Start_MP"] = chunk_s_mp + (c["Start_Dist"] / total_len) * (chunk_e_mp - chunk_s_mp)
             c["Calibrated_End_MP"] = chunk_s_mp + (c["End_Dist"] / total_len) * (chunk_e_mp - chunk_s_mp)
+            c["Start_Dist"] += global_continuous_dist_m
+            c["End_Dist"] += global_continuous_dist_m
         for c in v:
             c["RouteId"] = route_norm
             c["Calibrated_Start_MP"] = chunk_s_mp + (c["Start_Dist"] / total_len) * (chunk_e_mp - chunk_s_mp)
             c["Calibrated_End_MP"] = chunk_s_mp + (c["End_Dist"] / total_len) * (chunk_e_mp - chunk_s_mp)
+            c["Start_Dist"] += global_continuous_dist_m
+            c["End_Dist"] += global_continuous_dist_m
         all_h.extend(h)
         all_v.extend(v)
         # Build Vertices and increment plotting X-axis for the next chunk
