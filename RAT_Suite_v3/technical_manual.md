@@ -9,7 +9,7 @@ The suite provides three operational capabilities:
 * Route-level Plan & Profile generation (engineering-style visual review artifacts)
 * 4D enrichment (Z/M-enabled geometry for GIS/CAD/3D downstream use)
 
-RAT v3 was developed to address a practical challenge common to DOT datasets: HPMS roadway geometry is often fragmented, noisy, and inconsistent across jurisdictions and functional classes. The suite is therefore designed to be resilient to disjointed geometry and schema variability, while maintaining transparent analytical methods and repeatable outputs.
+The current RAT version was developed to address a practical challenge common to DOT datasets: HPMS roadway geometry is often fragmented, noisy, and inconsistent across jurisdictions and functional classes. The suite is therefore designed to be resilient to disjointed geometry and schema variability, while maintaining transparent analytical methods and repeatable outputs.
 
 ### How to Use This Manual
 This manual is written for practitioners running the suite and technical reviewers validating its methods. To find what you need quickly, follow the matrix below.
@@ -28,7 +28,7 @@ This manual is written for practitioners running the suite and technical reviewe
 To make the tool operationally friendly, parameter tuning guides in the Appendix are written in practical terms (*"Increase when..."*, *"Decrease when..."*). This allows analysts to adjust the suite's behavior without needing to reverse-engineer the underlying Python codebase.
 
 **Scope and Intended Use Reminder**
-RAT v3 is an engineering analytics and data-derivation suite intended for decision support, screening, and HPMS quality review. **It is not a replacement for:**
+The HPMS RAT Suite is an engineering analytics and data-derivation suite intended for decision support, screening, and HPMS quality review. **It is not a replacement for:**
 * Design standards
 * Signed/sealed design deliverables
 * Final field survey controls
@@ -38,21 +38,22 @@ Always apply appropriate validation when using RAT outputs for high-consequence 
 ---
 
 ## 1. Overview
-The HPMS Roadway Alignment Tool (RAT) Suite v3 is an enterprise geospatial processing pipeline for deriving roadway alignment intelligence from HPMS geometry. It is designed to process fragmented roadway networks at scale, detect horizontal and vertical curves, generate plan/profile engineering sheets, and produce 4D-enriched geometry suitable for downstream workflows.
+The HPMS Roadway Alignment Tool (RAT) Suite is an enterprise geospatial processing pipeline for deriving roadway alignment intelligence from HPMS geometry. It is designed to process fragmented roadway networks at scale, detect horizontal and vertical curves, generate plan/profile engineering sheets, and produce 4D-enriched geometry suitable for downstream workflows.
 
 Unlike a design-authoring system, RAT is an **analytical derivation tool**: it estimates curve attributes from observed geometry and elevation data.
 
 ---
 
-## 2. What Changed from v2 to v3 and Why It Matters
+## 2. What Changed in This Version and Why It Matters
 Version 3 moves from "multiple independently evolving tools" to a unified architecture with a shared core engine and a single orchestrating GUI. 
 
 ### 2.1 Architectural & Computational Efficiencies
-To process tens of thousands of fragmented routes at a statewide scale, the v3 architecture introduces several critical computer science optimizations that drastically reduce processing time and hardware strain.
+To process tens of thousands of fragmented routes at a statewide scale, the RAT Suite architecture introduces several critical computer science optimizations that drastically reduce processing time and hardware strain.
 
-* **Subprocess Memory Isolation (Bypassing the GIL):** Python is historically limited by the Global Interpreter Lock (GIL) and struggles to release memory when processing massive DataFrames. v3 solves this by completely decoupling the interface from the math. The Unified GUI acts only as a lightweight dispatcher that triggers the CLI modules in temporary, isolated memory environments. Once a batch finishes processing, that memory block is immediately dumped, eliminating memory-leak crashes.
-* **Algorithmic Time Complexity (cKDTree Spatial Indexing):** In the 4D Enricher, mapping thousands of fragmented 2D vertices to a continuous 3D elevation profile requires massive data correlation. v3 utilizes a Metric `cKDTree` (a highly optimized spatial indexing algorithm). This organizes the geometry into a mathematical search tree, dropping the search time complexity and instantly snapping coordinates to their nearest 3D neighbor.
-* **Unified Analytical Core (Compute-Once Architecture):** v3 routes all modules through a single, shared analytical core (`rat_core.py`). A route's raw geometry is projected to a flat UTM plane, densified, and smoothed via splines exactly once, cutting required processing overhead in half.
+* **Subprocess Memory Isolation (Bypassing the GIL):** Python is historically limited by the Global Interpreter Lock (GIL) and struggles to release memory when processing massive DataFrames. This version solves this by completely decoupling the interface from the math. The Unified GUI acts only as a lightweight dispatcher that triggers the CLI modules in temporary, isolated memory environments. Once a batch finishes processing, that memory block is immediately dumped, eliminating memory-leak crashes.
+* **Algorithmic Time Complexity (cKDTree Spatial Indexing):** In the 4D Enricher, mapping thousands of fragmented 2D vertices to a continuous 3D elevation profile requires massive data correlation. The current version utilizes a Metric `cKDTree` (a highly optimized spatial indexing algorithm). This organizes the geometry into a mathematical search tree, dropping the search time complexity and instantly snapping coordinates to their nearest 3D neighbor.
+* **Unified Analytical Core (Compute-Once Architecture):** The current version routes all modules through a single, shared analytical core (`rat_core.py`). A route's raw geometry is projected to a flat UTM plane, densified, and smoothed via splines exactly once, cutting required processing overhead in half.
+* **Contiguous Block Grouping (Context-Aware Processing):** A single HPMS route can cross city limits or change functional classes multiple times. The current version introduces a cumsum() block-identification algorithm that dynamically chops routes into contiguous segments whenever the UrbanID or FSystem changes. This allows the engine to apply distinct stiffness factors to rural highways versus urban grids on the fly, without accidentally stitching separated urban chunks together and destroying the continuous alignment.
 
 ---
 
@@ -101,7 +102,7 @@ If your state has internally modified HPMS data, you can process local files usi
 * **The Solution (Decoupled Splines):** The RAT engine mathematically "irons out" the road using a Spline. It "decouples" the horizontal (X, Y) and vertical (Z) smoothing, meaning it can aggressively iron out GPS jitters side-to-side without flattening out a legitimate hill.
 
 ### 5.2 The "North Crossing" Problem: Deflection Angle (Delta) Unwrapping
-* **The Issue:** While the RAT v3 engine uses calculus to calculate the radius of a curve, it must still look at the compass heading to calculate the Total Deflection Angle (Delta). If a road curving gently to the right crosses true North, its heading instantly jumps from 359° back to 1°, creating a false 358-degree deflection angle.
+* **The Issue:** While the current RAT engine uses calculus to calculate the radius of a curve, it must still look at the compass heading to calculate the Total Deflection Angle (Delta). If a road curving gently to the right crosses true North, its heading instantly jumps from 359° back to 1°, creating a false 358-degree deflection angle.
 * **The Solution (Unwrapped Headings):** The engine uses "unwrapping." Instead of resetting at 360°, the math allows the compass to keep counting upward (e.g., 358°, 359°, 360°, 361°), calculating a perfectly accurate deflection angle.
 
 ### 5.3 The "River Dip" Problem: Topo Draping and Bridging
@@ -137,6 +138,13 @@ The engine (`rat_core.py`) calculates the first and second gradients (derivative
 
 ### 5.11 Vertical Parabolic Fitting (Vertical Analysis)
 The engine applies a second-degree polynomial regression (`numpy.polyfit`) to fit a true mathematical parabola. It derives the exact tangent slopes (Grades) at the precise Point of Vertical Curvature (PVC) and Point of Vertical Tangency (PVT) using the first derivative.
+
+### 5.12 The "City Grid" Problem: Rural vs. Urban Bifurcation
+* **The Issue:** Urban alignments are heavily constrained by right-of-way, intersections, and lower design speeds, meaning they inherently feature tighter, more abrupt geometry than sweeping rural highways. Applying a massive 4500 smoothing factor to an urban route will mathematically "wash out" legitimate city blocks, while applying a 100 factor to a rural route leaves too much micro-noise.
+
+* **The Solution:** (The 2x4 Stiffness Matrix): The RAT Suite categorizes every coordinate using the HPMS UrbanID field (where 99999 is Rural, and all others are Urban). The core engine applies a 2x4 matrix of parameters based on Context (Rural/Urban) and Functional System.
+
+* **Bifurcated Thresholds:** Because urban curves (like channelized slip lanes) and urban vertical profile shifts (like ramping up to a railway) are physically shorter and more abrupt than rural features, the engine also bifurcates the minimum detection thresholds. For example, the engine looks for minimum horizontal curve lengths of 100 feet in rural areas, but drops that requirement to 50 feet in urban areas to capture legitimate intersection movements.
 
 ## 6. Units of Measurement – Metric Core
 When configuring parameters and analyzing the output data, you will notice a mix of Metric (meters) and Imperial (feet/miles) units. This hybrid approach is intentional, designed to merge strict geospatial standards with standard US highway engineering practices.
@@ -243,7 +251,7 @@ The Alignment module produces route-wide horizontal and vertical curve datasets.
 > **Interpretation Note:** Higher absolute `Alg_Diff` generally indicates a stronger vertical transition. K_Value interpretation depends on context (route class, speed environment, terrain).
 
 ### 10.5 Plan/Profile Vertices Output
-* **`Reference point`:** Reference point value interpolated across selected route/chunk bounds.
+* **`Milepost`:** The calibrated linear referencing (LRS) measure interpolated across the selected route/chunk bounds.
 * **`Dist_Ft`:** Continuous distance axis in feet for plotting.
 * **`Lon` / `Lat`:** Smoothed coordinate output (WGS84).
 * **`Elev_Ft`:** Smoothed elevation profile (feet).
@@ -297,36 +305,42 @@ Because the RAT Suite applies strict mathematical models to highly variable, hum
 
 ---
 
-## Appendix A. Parameter Reference & Tuning Guide (v3)
+## Appendix A. Parameter Reference & Tuning Guide
 *How to use this appendix: Start with defaults. Tune only one group at a time, validate on benchmark routes, then scale to statewide processing.*
 
-**Table 1: Core Spacing & Smoothing**
+### Table 1: Core Spacing & Smoothing
 
 | Parameter | Default | Units | Primary Effect |
 | :--- | :--- | :--- | :--- |
 | `DENSIFY_SPACING_FT` | 10 | ft | Interpolation interval before analytics |
-| `H_SMOOTH_FACTOR` | 4500 | factor | Horizontal stiffness (FS 1–2 baseline) |
-| `V_SMOOTH_FACTOR` | 4500 | factor | Vertical smoothing stiffness (FS 1–2 baseline) |
+| `H_SMOOTH_FACTOR` | 4500 | ft | Horizontal stiffness (FS 1–2 baseline) |
+| `V_SMOOTH_FACTOR` | 4500 | ft | Vertical smoothing stiffness (FS 1–2 baseline) |
+| `H_SMOOTH_FACTOR_FS12_URBAN` | 4500 | factor | Horizontal stiffness override for urban boundaries |
+| `V_SMOOTH_FACTOR_FS12_URBAN` | 4500 | factor | Vertical stiffness override for urban boundaries |
 | `H_BASE_SMOOTH_WINDOW` | 21 | points | Heading smoothing window |
 
-**Table 2: Horizontal Curve Detection**
+### Table 2: Horizontal Curve Detection
 
 | Parameter | Default | Units | Primary Effect |
 | :--- | :--- | :--- | :--- |
 | `H_MIN_DELTA` | 3.5 | deg | Minimum total deflection to keep curve |
 | `H_MIN_CURVE_LENGTH_FT`| 100 | ft | Minimum horizontal curve length |
+| `H_MIN_DELTA_URBAN`| 5.0 | deg | Minimum total deflection to keep curve (Urban)|
+| `H_MIN_CURVE_LENGTH_URBAN_FT`| 50 | ft | Minimum horizontal curve length (Urban)|
 | `H_MAX_RADIUS_FT` | 165000| ft | Upper radius considered as curve |
 
-**Table 3: Vertical Curve Detection**
+### Table 3: Vertical Curve Detection
 
 | Parameter | Default | Units | Primary Effect |
 | :--- | :--- | :--- | :--- |
 | `V_MIN_CURVE_LENGTH_FT`| 200 | ft | Minimum vertical curve length |
 | `V_MIN_GRADE_CHANGE` | 0.5 | % | Minimum algebraic grade difference |
+| `V_MIN_CURVE_LENGTH_URBAN_FT` | 80 | ft | Minimum vertical curve length (Urban)|
+| `V_MIN_GRADE_CHANGE_URBAN` | 1.0 | % | Minimum algebraic grade difference (Urban)|
 | `V_VC_THRESHOLD` | 0.002 | rate | Trigger sensitivity for VC candidates |
 | `V_MIN_OFFSET_FT` | 0.10 | ft | Minimum vertical offset significance |
 
-**Table 4: Bridging / Profile Repair Controls**
+### Table 4: Bridging / Profile Repair Controls
 
 | Parameter | Default | Units | Primary Effect |
 | :--- | :--- | :--- | :--- |
@@ -334,7 +348,7 @@ Because the RAT Suite applies strict mathematical models to highly variable, hum
 | `DIP_THRESHOLD_FT` | 6.5 | ft | Deviation below trend that flags valley dip |
 | `BRIDGE_MAX_LEN_FT` | 8200 | ft | Max interpolation span for bridge correction |
 
-**Table 5: Merge and Post-Processing**
+### Table 5: Merge and Post-Processing
 
 | Parameter | Default | Units | Primary Effect |
 | :--- | :--- | :--- | :--- |
@@ -342,12 +356,61 @@ Because the RAT Suite applies strict mathematical models to highly variable, hum
 | `MERGE_GAP_FT` | 600 | ft | Horizontal merge gap tolerance |
 | `V_MERGE_GAP_FT` | 1500 | ft | Vertical merge gap tolerance |
 
-**A.6 Functional-System-Specific Smoothing Overrides**
-RAT v3 supports different smoothing defaults by functional system class:
-* **FS 1–2:** higher stiffness
-* **FS 3:** moderate-high
-* **FS 4–5:** moderate
-* **FS 6–7:** lower stiffness / higher flexibility
+### A.6 Context-Aware Smoothing Matrix (Functional System & Urban/Rural)
+
+RAT utilizes a 2x4 matrix to dynamically adjust horizontal and vertical spline stiffness based on the area and functional class of the road. The horizontal and vertical smoothing factors are in feet.
+
+* **FS 3 (Principal Arterials):** Moderate-high speeds, but subject to more at-grade intersections.
+  * Rural: 4000
+  * Urban: 500
+* **FS 4–5 (Minor Arterials / Major Collectors):** Moderate speeds, heavily conforming to local terrain or city grids.
+  * Rural: 2500
+  * Urban: 100
+* **FS 6–7 (Local Roads):** Low speeds, abrupt geometry, sharp 90-degree intersection turns.
+  * Rural: 1000
+  * Urban: 50
+
+### A.7 Additional Urban Settings
+
+The current version allows the user to also adjust the minimum curve lengths, minimum horizontal delta, and the minimum vertical grade change for urban areas. The RAT Suite defaults for these parameters are as follows:
+* **Minimum horizontal curve length (`H_MIN_CURVE_LENGTH_FT`)**
+  * Rural: 100.0 ft
+  * Urban: 50.0 ft
+* **Minimum horizontal delta (`H_MIN_DELTA_URBAN`)**
+  * Rural: 3.5 deg
+  * Urban: 5.0 deg
+* **Minimum vertical curve length (`V_MIN_CURVE_LENGTH_URBAN_FT`)**
+  * Rural: 200.0 ft
+  * Urban: 80.0 ft
+* **Minimum grade change (`V_MIN_GRADE_CHANGE_URBAN`)**
+  * Rural: 0.5 %
+  * Urban: 1.0 %
+
+### A.8 Practical Parameter Tuning Guidance
+While the default parameters are calibrated for a general statewide run, varying topographies and digitization practices may require tuning. Use the following guide to troubleshoot and adjust the engine's behavior.
+
+#### 1. Horizontal Smoothing (`H_SMOOTH_FACTOR`)
+* **What it does:** Acts as the "tension" of the mathematical spline. Higher numbers pull the line tighter and stiffer; lower numbers allow it to flex and bend more easily.
+* **Increase when:** Your outputs show an impossibly high density of tiny, high-severity horizontal curves (e.g., 50 curves in a single mile). This usually indicates the raw data has "GPS Jitter" (multipath errors) or "Stair-stepping," and the spline needs more stiffness to iron those vibrations out.
+* **Decrease when:** Legitimate, tight geometry (like cloverleaf interchange ramps, roundabouts, or sharp mountain switchbacks) is being flattened out and skipped by the engine.
+
+#### 2. Deflection and Length Thresholds (`H_MIN_DELTA` & `H_MIN_CURVE_LENGTH_FT`)
+* **What they do:** They act as the "significance filters." They tell the engine to ignore curves that are too gentle or too short to matter for safety analytics.
+* **Increase when:** The tool is flagging miles-long, sweeping interstate bends as curves, or catching minor lane-shifts and digitization drifts. Bumping the Delta to 5.0° or the Length to 200ft will filter these out.
+* **Decrease when:** You are specifically analyzing low-speed, local functional class roads where minor deflections or short geometric shifts are actually safety-critical.
+
+#### 3. Vertical Bridging (`TREND_WINDOW_FT` & `DIP_THRESHOLD_FT`)
+* **What they do:** They control the "Valley Test." The trend window establishes the baseline earth slope, and the dip threshold determines how far the road is allowed to drop below that baseline before the bridge engages.
+* **Increase `TREND_WINDOW_FT` when:** A valley is so massively wide (like the Mississippi River floodplain) that a small trend window gets dragged down into the valley with the road. A larger window forces the algorithm to anchor onto the distant shorelines.
+* **Decrease `DIP_THRESHOLD_FT` when:** The engine is failing to bridge over small, shallow creeks or minor box culverts. Dropping the threshold from 6.5ft to 3.0ft makes the bridging trigger much more sensitive.
+
+#### 4. The "Overpass Spike" (`V_SMOOTH_FACTOR`)
+* **What it does:** The vertical equivalent to the horizontal tension. 
+* **Increase when:** You see massive 10-to-30-foot upward spikes in your Profile View PDFs or Vertical CSVs. The bridging logic only fixes *drops* in the earth; it cannot fix LiDAR bouncing off massive highway overpasses. By increasing `V_SMOOTH_FACTOR`, you give the vertical spline enough stiffness to punch straight through the artificial overpass spike.
+
+### A.9 Additional Adjustments
+
+When creating plan & profile sheets for urban areas, the user may find that some routes that make a sharp 90 degree turn will run off the top and/or bottom of the plan view. If this happens, the user can expand the extent of the plan view y-axis by changing y limits in `rat_plan_profile_report_pdf.py` on line 178 (**ax_plan.set_ylim(-200, 200)**) from 200 to 400 or larger. Similarly, some routes in mountainous locations may run off the top and/or bottom of the profile view. If this happens, the user can expand the extent of the profile view y-axis by changing the y limits in `rat_plan_profile_report_pdf.py` on line 226 (**ax_prof.set_ylim(avg_elev - 100, avg_elev + 100)**) from 100 to 200 or larger.
 
 ---
 
