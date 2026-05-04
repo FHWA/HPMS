@@ -14,7 +14,7 @@
 # https://creativecommons.org/publicdomain/zero/1.0/
 
 """
-RAT RESULTS VALIDATOR (QA/QC Module)
+RAT RESULTS VALIDATOR v3.0 (QA/QC Module)
 --------------------------------------------------------------------------------
 ROLE: Automated quality assurance checker for RAT Suite outputs.
 DESCRIPTION: 
