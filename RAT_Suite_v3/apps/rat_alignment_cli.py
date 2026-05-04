@@ -14,7 +14,7 @@
 # https://creativecommons.org/publicdomain/zero/1.0/
 
 """
-RAT BULK ALIGNMENT CLI
+RAT BULK ALIGNMENT CLI v3.0
 --------------------------------------------------------------------------------
 ROLE: Batch processor for statewide horizontal and vertical curve detection.
 DESCRIPTION: 
@@ -39,8 +39,8 @@ import folium
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import shapely
-import pyproj
+# import shapely delete after testing
+# import pyproj delete after testing
 # ----------------------------
 # Path bootstrap for core import
 # ----------------------------
@@ -49,7 +49,6 @@ RAT_SUITE_DIR = os.path.dirname(THIS_DIR)
 if RAT_SUITE_DIR not in sys.path:
     sys.path.insert(0, RAT_SUITE_DIR)
 from pyproj import Transformer
-from shapely.geometry import LineString
 from core.rat_core import (
     build_params,
     stitch_linestrings_ordered,
@@ -77,7 +76,6 @@ def load_local_hpms(path: str) -> pd.DataFrame:
             gdf = gdf.to_crs(epsg=4326)
         df = pd.DataFrame(gdf.drop(columns="geometry"))
         df["WKT"] = gdf["geometry"].apply(lambda geom: geom.wkt if geom else None)
-    
     # fuzzy rename
     col_map = {}
     for col in df.columns:
@@ -93,90 +91,68 @@ def load_local_hpms(path: str) -> pd.DataFrame:
         elif c in ["urban_id", "urbanid", "urban_code"]:
             col_map[col] = "UrbanID"
     df.rename(columns=col_map, inplace=True)
-
-    # required fields
+    # normalize
     if "RouteId" not in df.columns:
-        raise ValueError("Missing RouteId column after normalization.")
-    if "WKT" not in df.columns:
-        raise ValueError("Missing geometry/WKT column after normalization.")
-
-    # normalization & defaults
-    if "Start_MP" not in df.columns: df["Start_MP"] = 0.0
-    if "End_MP" not in df.columns: df["End_MP"] = 0.0
-    if "FSystem" not in df.columns: df["FSystem"] = 1
-    if "UrbanID" not in df.columns: df["UrbanID"] = 99999
-
-    df["RouteId"] = df["RouteId"].astype(str).str.strip().str.upper()
-    df["Start_MP"] = pd.to_numeric(df["Start_MP"], errors="coerce").fillna(0.0)
-    df["End_MP"] = pd.to_numeric(df["End_MP"], errors="coerce").fillna(0.0)
-    df["FSystem"] = pd.to_numeric(df["FSystem"], errors="coerce").fillna(1).astype(int)
-    
-    df["UrbanID"] = pd.to_numeric(df["UrbanID"], errors="coerce").fillna(99999)
-    df["Is_Urban"] = (df["UrbanID"] != 99999) & (df["UrbanID"] != 0)
-
-    # drop bad geometry
-    df["WKT"] = df["WKT"].astype(str).str.strip()
-    df = df[df["WKT"].notna() & (df["WKT"] != "")].copy()
+        raise ValueError("No RouteId column found.")
+    if "Start_MP" not in df.columns:
+        df["Start_MP"] = 0.0
+    if "End_MP" not in df.columns:
+        df["End_MP"] = 0.0
+    for c in ["Start_MP", "End_MP", "FSystem", "UrbanID"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    df["RouteId"] = df["RouteId"].astype(str).str.strip()
+    df = df.dropna(subset=["WKT"]).copy()
     return df
-
 def process_route(route_id: str, subset: pd.DataFrame, dem_dir: str, params: dict):
     subset = subset.sort_values("Start_MP")
+    
+    f_sys = int(subset["FSystem"].mode()[0]) if "FSystem" in subset.columns else 1
     download_dems(subset["WKT"].tolist(), dem_dir)
     
-    # Identify contiguous blocks of FSystem and Is_Urban
-    subset['block'] = (subset[['FSystem', 'Is_Urban']] != subset[['FSystem', 'Is_Urban']].shift()).any(axis=1).cumsum()
-    
-    all_chunks = []
-    for block_id, chunk in subset.groupby('block'):
-        f_sys = int(chunk["FSystem"].iloc[0])
-        is_urban = bool(chunk["Is_Urban"].iloc[0])
-        lines = stitch_linestrings_ordered(chunk["WKT"].tolist())
-        for g in lines:
-            all_chunks.append({"geom": g, "f_sys": f_sys, "is_urban": is_urban})
-
-    if not all_chunks:
+    lines = stitch_linestrings_ordered(subset["WKT"].tolist())
+    if not lines:
         return [], []
-
     h_all, v_all = [], []
+    # --- FIX: Calculate total route length in METERS using UTM ---
     total_stitch_len_m = 0.0
-    
-    for info in all_chunks:
-        lon, lat = info["geom"].coords[0]
+    chunk_lengths_m = []
+    for g in lines:
+        lon, lat = g.coords[0]
         utm = get_appropriate_utm_zone(lon, lat)
         proj = Transformer.from_crs("EPSG:4326", f"EPSG:{utm}", always_xy=True)
-        coords_m = [proj.transform(x, y) for x, y in info["geom"].coords]
-        info["length_m"] = LineString(coords_m).length
-        total_stitch_len_m += info["length_m"]
-        
+        coords_m = [proj.transform(x, y) for x, y in g.coords]
+        length_m = LineString(coords_m).length
+        chunk_lengths_m.append(length_m)
+        total_stitch_len_m += length_m
     if total_stitch_len_m == 0: total_stitch_len_m = 1.0
     cumulative_stitch_dist_m = 0.0
     route_s = float(subset["Start_MP"].min())
     route_e = float(subset["End_MP"].max())
-    
-    for part_idx, info in enumerate(all_chunks):
-        chunk_length_m = info["length_m"]
+    for part_idx, line in enumerate(lines):
+        # --- FIX: Allocate exact chunk bounds using METERS ---
+        chunk_length_m = chunk_lengths_m[part_idx]
         chunk_start_mp = route_s + ((cumulative_stitch_dist_m / total_stitch_len_m) * (route_e - route_s))
         cumulative_stitch_dist_m += chunk_length_m
         chunk_end_mp = route_s + ((cumulative_stitch_dist_m / total_stitch_len_m) * (route_e - route_s))
         
-        # Pass the block's specific fs/urban flags
-        res = smooth_plan_profile_from_linestring(info["geom"], dem_dir, params, info["f_sys"], info["is_urban"])
+        res = smooth_plan_profile_from_linestring(line, dem_dir, params)
         if res is None:
             continue
-            
         spacing_m = res["spacing_m"]
         coords_m_smooth = res["coords_m_smooth"]
         coords_wgs_smooth = res["coords_wgs_smooth"]
         z_smooth = res["z_smooth"]
-        h_curves = analyze_horizontal_curvature(coords_m_smooth, spacing_m, params, info["is_urban"])
+        h_curves = analyze_horizontal_curvature(coords_m_smooth, spacing_m, params)
         if params.get("ENABLE_MERGE", False):
             h_curves = merge_horizontal_curves(h_curves, params)
-        v_curves = analyze_vertical_parabolic(z_smooth, spacing_m, params, info["is_urban"])
+        v_curves = analyze_vertical_parabolic(z_smooth, spacing_m, params)
         total_len = max(res["d_axis"][-1], 1.0)
         for c in h_curves:
             p0 = c["Start_Dist"] / total_len
             p1 = c["End_Dist"] / total_len
             c["RouteId"] = route_id
+            c["FSystem"] = f_sys
             c["Part"] = part_idx + 1
             # --- FIX: Apply the calculated chunk boundaries ---
             c["Calibrated_Start_MP"] = chunk_start_mp + p0 * (chunk_end_mp - chunk_start_mp)
@@ -192,6 +168,7 @@ def process_route(route_id: str, subset: pd.DataFrame, dem_dir: str, params: dic
             p0 = c["Start_Dist"] / total_len
             p1 = c["End_Dist"] / total_len
             c["RouteId"] = route_id
+            c["FSystem"] = f_sys
             c["Part"] = part_idx + 1
             # --- FIX: Apply the calculated chunk boundaries ---
             c["Calibrated_Start_MP"] = chunk_start_mp + p0 * (chunk_end_mp - chunk_start_mp)
@@ -216,6 +193,7 @@ def generate_html_map(df_h, df_v, out_html):
     color_map = {'A': 'green', 'B': '#a6d96a', 'C': '#fdae61', 'D': '#d7191c', 'E': '#9e0142', 'F': 'purple'}
     if not df_h.empty and "geometry" in df_h.columns:
         gdf_h = gpd.GeoDataFrame(df_h, geometry="geometry", crs="EPSG:4326")
+        gdf_h["geometry"] = gdf_h["geometry"].simplify(tolerance=0.00005)   # Simplify geometry to reduce HTML file size
         bounds_list.append(gdf_h.total_bounds)
         
         folium.GeoJson(
@@ -226,10 +204,11 @@ def generate_html_map(df_h, df_v, out_html):
                 "weight": 4,
                 "dashArray": '10, 10' if f['properties'].get('Merge_Status') == 'Compound' else ''
             },
-            tooltip=folium.GeoJsonTooltip(fields=[c for c in ["RouteId", "Bin", "Radius_m", "Delta", "Merge_Status"] if c in gdf_h.columns])
+            tooltip=folium.GeoJsonTooltip(fields=[c for c in ["RouteId", "Calibrated_Start_MP", "Calibrated_End_MP", "Bin", "Radius_m", "Delta", "Merge_Status"] if c in gdf_h.columns])
         ).add_to(m)
     if not df_v.empty and "geometry" in df_v.columns:
         gdf_v = gpd.GeoDataFrame(df_v, geometry="geometry", crs="EPSG:4326")
+        gdf_v["geometry"] = gdf_v["geometry"].simplify(tolerance=0.00005)   # Simplify geometry to reduce HTML file size
         bounds_list.append(gdf_v.total_bounds)
         
         folium.GeoJson(
@@ -239,7 +218,7 @@ def generate_html_map(df_h, df_v, out_html):
                 "color": color_map.get(f['properties'].get('Grade_Bin', 'A'), 'gray'),
                 "weight": 4
             },
-            tooltip=folium.GeoJsonTooltip(fields=[c for c in ["RouteId", "Type", "Grade_Bin", "K_Value", "Alg_Diff"] if c in gdf_v.columns])
+            tooltip=folium.GeoJsonTooltip(fields=[c for c in ["RouteId", "Calibrated_Start_MP", "Calibrated_End_MP", "Type", "Grade_Bin", "K_Value", "Alg_Diff"] if c in gdf_v.columns])
         ).add_to(m)
     # 1. Fit Bounds (Auto-Zoom to the data)
     if bounds_list:
@@ -266,7 +245,16 @@ def generate_html_map(df_h, df_v, out_html):
     folium.LayerControl().add_to(m)
     m.save(out_html)
 
-def generate_dashboard(df_h, df_v, out_html, out_dir):
+def generate_dashboard(df_h: pd.DataFrame, df_v: pd.DataFrame, df_health: pd.DataFrame, out_html: str):
+    import matplotlib.pyplot as plt
+    import os
+    import pandas as pd
+    import numpy as np
+    
+    out_dir = os.path.dirname(out_html)
+    fs_index = [1, 2, 3, 4, 5, 6, 7]
+
+    # --- 1. Statewide Totals (Basic Charts) ---
     chart_h = os.path.join(out_dir, "chart_horizontal_bins.png")
     chart_v = os.path.join(out_dir, "chart_vertical_bins.png")
     if not df_h.empty and "Bin" in df_h.columns:
@@ -277,6 +265,7 @@ def generate_dashboard(df_h, df_v, out_html, out_dir):
         plt.tight_layout()
         plt.savefig(chart_h, dpi=120)
         plt.close()
+        
     if not df_v.empty and "Grade_Bin" in df_v.columns:
         vc = df_v["Grade_Bin"].value_counts().reindex(list("ABCDEF"), fill_value=0)
         plt.figure(figsize=(6, 4))
@@ -285,21 +274,130 @@ def generate_dashboard(df_h, df_v, out_html, out_dir):
         plt.tight_layout()
         plt.savefig(chart_v, dpi=120)
         plt.close()
+
+    # --- 2. Severity by Functional System (Stacked Bar Charts) ---
+    chart_fs_h = os.path.join(out_dir, "chart_fsystem_horizontal.png")
+    chart_fs_v = os.path.join(out_dir, "chart_fsystem_vertical.png")
+    
+    if not df_h.empty and "Bin" in df_h.columns and "FSystem" in df_h.columns:
+        ct_h = pd.crosstab(df_h["FSystem"], df_h["Bin"]).reindex(index=fs_index, columns=list("ABCDEF"), fill_value=0)
+        plt.figure(figsize=(8, 5))
+        ct_h.plot(kind="bar", stacked=True, colormap="RdYlGn_r", ax=plt.gca())
+        plt.title("Horizontal Curves by Functional System")
+        plt.ylabel("Count of Curves")
+        plt.xlabel("Functional System (1 = Interstate, 6 = Minor Arterial)")
+        plt.legend(title="Severity Bin", bbox_to_anchor=(1.05, 1), loc='upper left')
+        plt.tight_layout()
+        plt.savefig(chart_fs_h, dpi=120)
+        plt.close()
+        
+    if not df_v.empty and "Grade_Bin" in df_v.columns and "FSystem" in df_v.columns:
+        ct_v = pd.crosstab(df_v["FSystem"], df_v["Grade_Bin"]).reindex(index=fs_index, columns=list("ABCDEF"), fill_value=0)
+        plt.figure(figsize=(8, 5))
+        ct_v.plot(kind="bar", stacked=True, colormap="RdYlGn_r", ax=plt.gca())
+        plt.title("Vertical Curves by Functional System")
+        plt.ylabel("Count of Curves")
+        plt.xlabel("Functional System (1 = Interstate, 6 = Minor Arterial)")
+        plt.legend(title="Severity Bin", bbox_to_anchor=(1.05, 1), loc='upper left')
+        plt.tight_layout()
+        plt.savefig(chart_fs_v, dpi=120)
+        plt.close()
+
+    # --- 3. Advanced Analytical Charts ---
+    chart_scatter = os.path.join(out_dir, "31_Chart_Scatter_Debug.png")
+    if not df_h.empty and "Radius_m" in df_h.columns and "Length_m" in df_h.columns:
+        plt.figure(figsize=(6, 4))
+        plt.scatter(df_h["Length_m"] * 3.28084, df_h["Radius_m"] * 3.28084, alpha=0.4, color='teal', s=15)
+        plt.title("Horizontal Scatter: Length vs Radius")
+        plt.xlabel("Length (ft)")
+        plt.ylabel("Radius (ft)")
+        plt.yscale("log")
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(chart_scatter, dpi=120)
+        plt.close()
+
+    chart_k = os.path.join(out_dir, "31_Chart_Vertical_K.png")
+    if not df_v.empty and "K_Value" in df_v.columns:
+        plt.figure(figsize=(6, 4))
+        if "Type" in df_v.columns:
+            crest = df_v[df_v["Type"] == "CREST"]["K_Value"].dropna()
+            sag = df_v[df_v["Type"] == "SAG"]["K_Value"].dropna()
+            plt.hist(crest, bins=30, alpha=0.6, label="Crest", color="orange", range=(0, 300))
+            plt.hist(sag, bins=30, alpha=0.6, label="Sag", color="purple", range=(0, 300))
+            plt.legend()
+        plt.title("Vertical K-Value Distribution")
+        plt.xlabel("K-Value")
+        plt.ylabel("Frequency")
+        plt.tight_layout()
+        plt.savefig(chart_k, dpi=120)
+        plt.close()
+
+    chart_rej = os.path.join(out_dir, "31_Chart_Vertical_Rejection.png")
+    if not df_health.empty:
+        cols = [c for c in df_health.columns if "Filter" in c or "Reject" in c or "Drop" in c]
+        if cols:
+            sums = df_health[cols].sum()
+            plt.figure(figsize=(6, 4))
+            sums.plot(kind="bar", color="crimson")
+            plt.title("Curve Rejection / Filter Reasons")
+            plt.ylabel("Count")
+            plt.xticks(rotation=45, ha='right')
+            plt.tight_layout()
+            plt.savefig(chart_rej, dpi=120)
+            plt.close()
+
+    # --- 4. Calculate Summary Statistics ---
+    avg_h_rad = f"{df_h['Radius_m'].mean() * 3.28084:,.0f} ft" if not df_h.empty and 'Radius_m' in df_h.columns else "N/A"
+    avg_h_len = f"{df_h['Length_m'].mean() * 3.28084:,.0f} ft" if not df_h.empty and 'Length_m' in df_h.columns else "N/A"
+    avg_k = f"{df_v['K_Value'].mean():.1f}" if not df_v.empty and 'K_Value' in df_v.columns else "N/A"
+    avg_v_len = f"{df_v['Length_m'].mean() * 3.28084:,.0f} ft" if not df_v.empty and 'Length_m' in df_v.columns else "N/A"
+
+    # --- 5. Build the HTML File ---
     html = f"""
     <html><head><title>RAT Summary Dashboard</title></head>
-    <body style="font-family:Arial; margin:20px;">
-    <h2>RAT Summary Dashboard</h2>
-    <p>Horizontal curves: {len(df_h):,}</p>
-    <p>Vertical curves: {len(df_v):,}</p>
-    <h3>Top Sharpest Horizontal (smallest Radius_m)</h3>
-    {df_h.sort_values("Radius_m").head(20).to_html(index=False) if not df_h.empty and "Radius_m" in df_h.columns else "<p>No data</p>"}
-    <h3>Top Vertical by |Alg_Diff|</h3>
-    {df_v.reindex(df_v["Alg_Diff"].abs().sort_values(ascending=False).index).head(20).to_html(index=False) if not df_v.empty and "Alg_Diff" in df_v.columns else "<p>No data</p>"}
-    <h3>Charts</h3>
-    {"<img src='chart_horizontal_bins.png' style='max-width:700px;'><br>" if os.path.exists(chart_h) else ""}
-    {"<img src='chart_vertical_bins.png' style='max-width:700px;'><br>" if os.path.exists(chart_v) else ""}
+    <body style="font-family:Arial; margin:20px; background-color: #f8f9fa;">
+    
+    <div style="background-color: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); display: flex; gap: 50px;">
+        <div>
+            <h2>Alignment Summary</h2>
+            <p><strong>Horizontal curves detected:</strong> {len(df_h):,}</p>
+            <p><strong>Vertical curves detected:</strong> {len(df_v):,}</p>
+        </div>
+        <div>
+            <h2>Horizontal Stats</h2>
+            <p><strong>Average Curve Length:</strong> {avg_h_len}</p>
+            <p><strong>Average Radius:</strong> {avg_h_rad}</p>
+        </div>
+        <div>
+            <h2>Vertical Stats</h2>
+            <p><strong>Average Curve Length:</strong> {avg_v_len}</p>
+            <p><strong>Average K-Value:</strong> {avg_k}</p>
+        </div>
+    </div>
+
+    <h3 style="margin-top: 40px;">Severity by Functional System</h3>
+    <div style="display:flex; flex-wrap:wrap; gap:20px;">
+        {"<img src='chart_fsystem_horizontal.png' style='max-width:500px; border: 1px solid #ccc;'>" if os.path.exists(chart_fs_h) else ""}
+        {"<img src='chart_fsystem_vertical.png' style='max-width:500px; border: 1px solid #ccc;'>" if os.path.exists(chart_fs_v) else ""}
+    </div>
+    
+    <h3 style="margin-top: 40px;">Statewide Totals</h3>
+    <div style="display:flex; flex-wrap:wrap; gap:20px;">
+        {"<img src='chart_horizontal_bins.png' style='max-width:500px; border: 1px solid #ccc;'>" if os.path.exists(chart_h) else ""}
+        {"<img src='chart_vertical_bins.png' style='max-width:500px; border: 1px solid #ccc;'>" if os.path.exists(chart_v) else ""}
+    </div>
+
+    <h3 style="margin-top: 40px;">Advanced Diagnostics</h3>
+    <div style="display:flex; flex-wrap:wrap; gap:20px;">
+        {"<img src='31_Chart_Scatter_Debug.png' style='max-width:500px; border: 1px solid #ccc;'>" if os.path.exists(chart_scatter) else ""}
+        {"<img src='31_Chart_Vertical_K.png' style='max-width:500px; border: 1px solid #ccc;'>" if os.path.exists(chart_k) else ""}
+        {"<img src='31_Chart_Vertical_Rejection.png' style='max-width:500px; border: 1px solid #ccc;'>" if os.path.exists(chart_rej) else ""}
+    </div>
+    
     </body></html>
     """
+    
     with open(out_html, "w", encoding="utf-8") as f:
         f.write(html)
 
@@ -363,8 +461,9 @@ def main():
     routes = df["RouteId"].dropna().unique().tolist()
     logging.info(f"Routes found: {len(routes):,}")
     for i, rid in enumerate(routes, start=1):
-        if i % 100 == 0 or i == 1:
-            logging.info(f"Processing route {i}/{len(routes)}: {rid}")
+        if i % 50 == 0 or i == 1 or i == len(routes):
+            pct = (i / len(routes)) * 100
+            logging.info(f"Processing route {i:,} of {len(routes):,} [{pct:.1f}% Complete] - ID: {rid}")
         subset = df[df["RouteId"] == rid]
         h, v = process_route(rid, subset, args.demdir, params)
         all_h.extend(h)
@@ -399,7 +498,8 @@ def main():
     # optional dashboard
     if flags["dashboard"]:
         out_dash = os.path.join(args.outdir, f"alignment_dashboard_{stamp}.html")
-        generate_dashboard(df_h, df_v, out_dash, args.outdir)
+        df_health = pd.DataFrame()
+        generate_dashboard(df_h, df_v, df_health, out_dash)
         logging.info(f"Saved dashboard: {out_dash}")
     logging.info("Done.")
 if __name__ == "__main__":
