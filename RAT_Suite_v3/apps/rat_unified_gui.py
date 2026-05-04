@@ -14,7 +14,7 @@
 # https://creativecommons.org/publicdomain/zero/1.0/
 
 """
-RAT UNIFIED GUI (Graphical User Interface)
+RAT UNIFIED GUI v3.0 (Graphical User Interface)
 --------------------------------------------------------------------------------
 ROLE: The primary user-facing orchestrator for the RAT Suite.
 DESCRIPTION:
@@ -67,7 +67,7 @@ class TextHandler(logging.Handler):
 class RATUnifiedGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("RAT Unified GUI Runner")
+        self.root.title("RAT Unified GUI v3.0")
         # Fit window to screen size with some margin
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
@@ -87,8 +87,8 @@ class RATUnifiedGUI:
             "use_local": tk.BooleanVar(value=False),
 
             "densify_spacing_ft": tk.StringVar(value="10"),
-            "h_smooth_factor": tk.StringVar(value="4500"),
-            "v_smooth_factor": tk.StringVar(value="4500"),
+            "h_smooth_factor": tk.StringVar(value="800"),      # Functional systems 1 & 2
+            "v_smooth_factor": tk.StringVar(value="1800"),      # Functional systems 1 & 2
             "h_min_delta": tk.StringVar(value="3.5"),
             "h_min_curve_length_ft": tk.StringVar(value="100"),
             "v_min_curve_length_ft": tk.StringVar(value="200"),
@@ -133,24 +133,12 @@ class RATUnifiedGUI:
             "TREND_WINDOW_FT": tk.StringVar(value="1000"),
             "DIP_THRESHOLD_FT": tk.StringVar(value="6.5"),
             "BRIDGE_MAX_LEN_FT": tk.StringVar(value="8200"),
-            "H_MIN_CURVE_LENGTH_URBAN_FT": tk.StringVar(value="50.0"),
-            "H_MIN_DELTA_URBAN": tk.StringVar(value="5.0"),
-            "V_MIN_CURVE_LENGTH_URBAN_FT": tk.StringVar(value="80.0"),
-            "V_MIN_GRADE_CHANGE_URBAN": tk.StringVar(value="1.0"),
-            "H_SMOOTH_FACTOR_FS3": tk.IntVar(value="4000"),
-            "V_SMOOTH_FACTOR_FS3": tk.IntVar(value="4000"),
-            "H_SMOOTH_FACTOR_FS45": tk.IntVar(value="2500"),
-            "V_SMOOTH_FACTOR_FS45": tk.IntVar(value="2500"),
-            "H_SMOOTH_FACTOR_FS67": tk.IntVar(value="1000"),
-            "V_SMOOTH_FACTOR_FS67": tk.IntVar(value="1000"),
-            "H_SMOOTH_FACTOR_FS12_URBAN": tk.IntVar(value="4500"),
-            "V_SMOOTH_FACTOR_FS12_URBAN": tk.IntVar(value="4500"),
-            "H_SMOOTH_FACTOR_FS3_URBAN": tk.IntVar(value="500"),
-            "V_SMOOTH_FACTOR_FS3_URBAN": tk.IntVar(value="500"),
-            "H_SMOOTH_FACTOR_FS45_URBAN": tk.IntVar(value="100"),
-            "V_SMOOTH_FACTOR_FS45_URBAN": tk.IntVar(value="100"),
-            "H_SMOOTH_FACTOR_FS67_URBAN": tk.IntVar(value="50"),
-            "V_SMOOTH_FACTOR_FS67_URBAN": tk.IntVar(value="50"),
+            "H_SMOOTH_FACTOR_FS3": tk.IntVar(value="600"),
+            "H_SMOOTH_FACTOR_FS45": tk.IntVar(value="400"),
+            "H_SMOOTH_FACTOR_FS67": tk.IntVar(value="200"),
+            "V_SMOOTH_FACTOR_FS3": tk.IntVar(value="1600"),
+            "V_SMOOTH_FACTOR_FS45": tk.IntVar(value="1400"),
+            "V_SMOOTH_FACTOR_FS67": tk.IntVar(value="1200"),
         }
 
         self._build_ui()
@@ -330,20 +318,6 @@ class RATUnifiedGUI:
         self.log_text = tk.Text(lf_log, height=14, state="disabled")
         self.log_text.pack(fill=tk.BOTH, expand=True)
 
-        """
-        # 7) Background activity panel - there isn't enough room on the screen for this
-        lf_status = ttk.LabelFrame(main, text="Background Activity", padding=8)
-        lf_status.pack(fill=tk.X, pady=6)
-        self.status_phase = tk.StringVar(value="Idle")
-        self.status_detail = tk.StringVar(value="No active tasks.")
-        self.status_progress = ttk.Progressbar(lf_status, mode="indeterminate")
-        ttk.Label(lf_status, text="Phase:").grid(row=0, column=0, sticky="w")
-        ttk.Label(lf_status, textvariable=self.status_phase).grid(row=0, column=1, sticky="w", padx=(6, 20))
-        ttk.Label(lf_status, text="Detail:").grid(row=1, column=0, sticky="w")
-        ttk.Label(lf_status, textvariable=self.status_detail, wraplength=900).grid(row=1, column=1, sticky="w", padx=(6, 20))
-        self.status_progress.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 2))
-        lf_status.columnconfigure(1, weight=1)
-        """
     # ------------------------- UI helpers -------------------------
     def _toggle_source(self):
         use_local = self.vars["use_local"].get()
@@ -418,19 +392,13 @@ class RATUnifiedGUI:
 
         adv_h_keys = [
             "H_BASE_SMOOTH_WINDOW", "H_MIN_HEAD_CHANGE", "H_MAX_RADIUS_FT",
-            "H_SMOOTH_FACTOR_FS3", "H_SMOOTH_FACTOR_FS45", "H_SMOOTH_FACTOR_FS67",
-            "H_MIN_CURVE_LENGTH_URBAN_FT", "H_MIN_DELTA_URBAN", 
-            "H_SMOOTH_FACTOR_FS12_URBAN", "H_SMOOTH_FACTOR_FS3_URBAN", 
-            "H_SMOOTH_FACTOR_FS45_URBAN", "H_SMOOTH_FACTOR_FS67_URBAN"
+            "H_SMOOTH_FACTOR_FS3", "H_SMOOTH_FACTOR_FS45", "H_SMOOTH_FACTOR_FS67"
         ]
        
         adv_v_keys = [
             "V_VC_THRESHOLD", "V_GAP_TOLERANCE", "V_MIN_OFFSET_FT", "V_REVERSAL_TOLERANCE",
             "REGRESSION_WINDOW_FT", "TREND_WINDOW_FT", "DIP_THRESHOLD_FT", "BRIDGE_MAX_LEN_FT",
-            "V_SMOOTH_FACTOR_FS3", "V_SMOOTH_FACTOR_FS45", "V_SMOOTH_FACTOR_FS67",
-            "V_MIN_CURVE_LENGTH_URBAN_FT", "V_MIN_GRADE_CHANGE_URBAN",
-            "V_SMOOTH_FACTOR_FS12_URBAN", "V_SMOOTH_FACTOR_FS3_URBAN",
-            "V_SMOOTH_FACTOR_FS45_URBAN", "V_SMOOTH_FACTOR_FS67_URBAN"
+            "V_SMOOTH_FACTOR_FS3", "V_SMOOTH_FACTOR_FS45", "V_SMOOTH_FACTOR_FS67"
         ]
 
         grp_h = ttk.LabelFrame(form, text="Advanced Horizontal", padding=10)
@@ -564,8 +532,8 @@ class RATUnifiedGUI:
         """Restores the main UI parameter boxes to their standard defaults."""
         defaults = {
             "densify_spacing_ft": "10",
-            "h_smooth_factor": "4500",
-            "v_smooth_factor": "4500",
+            "h_smooth_factor": "800",
+            "v_smooth_factor": "1800",
             "h_min_delta": "3.5",
             "h_min_curve_length_ft": "100",
             "v_min_curve_length_ft": "200",
@@ -592,24 +560,12 @@ class RATUnifiedGUI:
             "TREND_WINDOW_FT": "1000",
             "DIP_THRESHOLD_FT": "6.5",
             "BRIDGE_MAX_LEN_FT": "8200",
-            'H_MIN_CURVE_LENGTH_URBAN_FT': 50.0,
-            'H_MIN_DELTA_URBAN': 5.0,
-            'V_MIN_CURVE_LENGTH_URBAN_FT': 80.0,
-            'V_MIN_GRADE_CHANGE_URBAN': 1.0,
-            "H_SMOOTH_FACTOR_FS3": "4000",
-            "V_SMOOTH_FACTOR_FS3": "4000",
-            "H_SMOOTH_FACTOR_FS45": "2500",
-            "V_SMOOTH_FACTOR_FS45": "2500",
-            "H_SMOOTH_FACTOR_FS67": "1000",
-            "V_SMOOTH_FACTOR_FS67": "1000",
-            "H_SMOOTH_FACTOR_FS12_URBAN": "2500",
-            "V_SMOOTH_FACTOR_FS12_URBAN": "2500",
-            "H_SMOOTH_FACTOR_FS3_URBAN": "500",
-            "V_SMOOTH_FACTOR_FS3_URBAN": "500",
-            "H_SMOOTH_FACTOR_FS45_URBAN": "100",
-            "V_SMOOTH_FACTOR_FS45_URBAN": "100",
-            "H_SMOOTH_FACTOR_FS67_URBAN": "50",
-            "V_SMOOTH_FACTOR_FS67_URBAN": "50"
+            "H_SMOOTH_FACTOR_FS3": "600",
+            "H_SMOOTH_FACTOR_FS45": "400",
+            "H_SMOOTH_FACTOR_FS67": "200",
+            "V_SMOOTH_FACTOR_FS3": "1600",
+            "V_SMOOTH_FACTOR_FS45": "1400",
+            "V_SMOOTH_FACTOR_FS67": "1200"
         }
         for k, v in adv_defaults.items():
             if k in self.advanced_defaults:
@@ -651,7 +607,7 @@ class RATUnifiedGUI:
                 if where:
                     params["$where"] = where
                
-                import time
+                # import time delete after testing
 
                 max_attempts = 6
                 r = None
@@ -885,11 +841,12 @@ class RATUnifiedGUI:
                     "--demdir", dem_dir,
                     "--params_json", params_json
                 ]
-                p = subprocess.run(cmd, capture_output=True, text=True)
-                if p.stdout:
-                    logging.info(p.stdout.strip())
-                if p.stderr:
-                    logging.info(p.stderr.strip())
+                
+                p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+                for line in p.stdout:
+                    logging.info(line.strip())
+                p.wait()
+
                 if p.returncode != 0:
                     self._set_status("Error", f"Alignment failed (exit code {p.returncode}).", busy=False)
                     messagebox.showerror("Run Failed", f"Alignment failed. Exit code {p.returncode}")
@@ -931,22 +888,6 @@ class RATUnifiedGUI:
                        
                         if not vertices_csv or not horizontal_csv or not vertical_csv:
                             logging.warning("Plan/Profile CSV outputs not found; cannot generate PDF.")
-                        else:
-                            pdf_out = os.path.join(out_dir, f"plan_profile_{route_id.replace('/', '-')}.pdf")
-                            cmd_pdf = [
-                                sys.executable, simple_pdf_script,
-                                "--vertices_csv", vertices_csv,
-                                "--horizontal_csv", horizontal_csv,
-                                "--vertical_csv", vertical_csv,
-                                "--pdf_out", pdf_out,
-                                "--route_id", route_id
-                            ]
-                            p_pdf = subprocess.run(cmd_pdf, capture_output=True, text=True)
-                    elif os.path.exists(simple_pdf_script):
-                        self._set_status("Plan/Profile", "Generating simple Plan/Profile PDF...", busy=True)
-                        vertices_csv, horizontal_csv, vertical_csv = self._latest_plan_profile_outputs(out_dir, route_id)
-                        if not vertices_csv or not horizontal_csv or not vertical_csv:
-                            logging.warning("Plan/Profile CSV outputs not found; cannot generate PDF.")
                             p_pdf = None
                         else:
                             pdf_out = os.path.join(out_dir, f"plan_profile_{route_id.replace('/', '-')}.pdf")
@@ -961,7 +902,7 @@ class RATUnifiedGUI:
                             p_pdf = subprocess.run(cmd_pdf, capture_output=True, text=True)
                     else:
                         p_pdf = None
-                        logging.warning("No PDF report script found (legacy or simple).")
+                        logging.warning("No PDF report script found.")
 
                     if p_pdf is not None:
                         if p_pdf.stdout:
