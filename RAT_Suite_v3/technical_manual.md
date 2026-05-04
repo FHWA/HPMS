@@ -228,8 +228,12 @@ The Alignment module produces route-wide horizontal and vertical curve datasets.
 * **`Start_Dist` / `End_Dist`:** Curve start/end positions along the processed route axis. *Note: These are expressed in meters, as they represent the internal metric geometric extent used for QA checks.*
 * **`Length_m`:** Computed curve length in meters.
 * **`Calibrated_Start_MP` / `Calibrated_End_MP`:** Reference point calibrated start/end values mapped back from chunk-relative distance.
-* **`Part`:** Indicates disjoint route chunk index when route geometry is fragmented.
+* **`Part`:** Indicates disjoint route chunk index when route geometry is fragmented. In the HPMS dataset, a single Route ID is not always a single, continuous line. A route might be broken into multiple disjointed segments (or "parts") due to crossing urban/rural boundaries or when the road changes functional class. The script processes each chunk separately.
+  * **Part 1** means the curve occured on the very first continuous chunk of the route.
+  * **Part 2** means there was a gap in the data, and this curve occurred on the second chunk, and so on.
 
+  If a route has no gaps in the HPMS data, every single curve on that route will simply be labeled as Part 1
+ 
 ### 10.3 Horizontal Curve Output Fields
 * **`Radius_m`:** Representative radius estimate for the detected curve segment.
 * **`Min_Radius_m`:** Sharpest local radius along the segment (apex behavior).
@@ -245,7 +249,9 @@ The Alignment module produces route-wide horizontal and vertical curve datasets.
 * **`Alg_Diff`:** Algebraic grade difference (signed).
 * **`K_Value`:** Approximate K-value.
 * **`Type`:** `CREST` or `SAG`.
-* **`E`:** Vertical offset metric used in significance filtering logic.
+* **`E`:** Vertical offset metric used in significance filtering logic. The **"E" (External Distance)** is the exact vertical distance (measured in meters) from the **Point of Vertical Intersection PVI**, where the two tangent lines intersect, to the actual smoothed roadway surface.
+  * On a **Crest** (hill) curve, it indicates how far below the intersection the road sits.
+  * On a **Sag** (valley) curve, it indicates how far above the intersection the road sits.
 * **`Grade_Bin`:** Severity classification (A–F) based on grade-change magnitude logic.
 
 > **Interpretation Note:** Higher absolute `Alg_Diff` generally indicates a stronger vertical transition. K_Value interpretation depends on context (route class, speed environment, terrain).
@@ -265,7 +271,7 @@ The PDF renderer (`rat_plan_profile_report_pdf.py`) overlays analytical results 
 The 4D module generates geometry with elevation (Z) and measure (M) semantics. `WKT_ZM` is the most portable serialized artifact for downstream parsing. Blender/CAD workflows generally perform better with projected metric geometry (hence the dedicated SHP export path).
 
 ### 10.8 Interactive HTML Map & Dashboard
-The HTML map provides a fast QA/communication layer, ideal for quick statewide pattern scans and stakeholder visualization. The Dashboard provides summary charts for executive/management briefing snapshots and quick quality pulses.
+The HTML map provides a fast QA/communication layer, ideal for quick statewide pattern scans and stakeholder visualization. The Dashboard provides summary charts for executive/management briefing snapshots and quick data quality checks.
 
 ### 10.9 QA Exceptions Output
 Treat the QA Exception export as a triage list to investigate clusters and distinguish data-quality issues from parameter-induced artifacts.
