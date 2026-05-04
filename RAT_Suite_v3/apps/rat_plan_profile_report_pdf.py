@@ -14,7 +14,7 @@
 # https://creativecommons.org/publicdomain/zero/1.0/
 
 """
-RAT PLAN & PROFILE PDF RENDERER (Matplotlib Generator)
+RAT PLAN & PROFILE PDF RENDERER v3.0 (Matplotlib Generator)
 --------------------------------------------------------------------------------
 ROLE: Standalone visual engineering plan and profile sheet generator.
 DESCRIPTION: 
@@ -90,9 +90,21 @@ def make_pdf(vertices_csv, horizontal_csv, vertical_csv, pdf_out, route_id):
     dist_ft = vtx["Dist_Ft"].to_numpy()
     elev_ft = vtx["Elev_Ft"].to_numpy()
     mp_array = vtx["Milepost"].to_numpy()
+    lon_array = vtx["Lon"].to_numpy()
+    lat_array = vtx["Lat"].to_numpy()
     total_dist = dist_ft[-1] - dist_ft[0]
     num_pages = max(1, int(math.ceil(total_dist / PAGE_LENGTH_FT)))
     date_str = datetime.datetime.now().strftime("%Y-%m-%d")
+
+    # Calculate global mileposts
+    global_mp_start = mp_array.min()
+    global_mp_end = mp_array.max()
+    
+    # Dynamically inject the mileposts into the output filename
+    base_dir = os.path.dirname(pdf_out)
+    base_name, ext = os.path.splitext(os.path.basename(pdf_out))
+    new_pdf_out = os.path.join(base_dir, f"{base_name}_MP_{global_mp_start:.3f}_to_{global_mp_end:.3f}{ext}")
+
     os.makedirs(os.path.dirname(pdf_out) or ".", exist_ok=True)
     with PdfPages(pdf_out) as pdf:
         for p in range(num_pages):
@@ -110,8 +122,10 @@ def make_pdf(vertices_csv, horizontal_csv, vertical_csv, pdf_out, route_id):
             sub_mp = mp_array[mask]
             sub_dist = dist_ft[mask]
             sub_elev = elev_ft[mask]
-            sub_lon = vtx['Lon'].to_numpy()[mask]
-            sub_lat = vtx['Lat'].to_numpy()[mask]
+            sub_lon = lon_array[mask]
+            sub_lat = lat_array[mask]
+            sub_lon = vtx['Lon'].to_numpy()[mask] 
+            sub_lat = vtx['Lat'].to_numpy()[mask] 
             if len(sub_x) < 2: continue
             p_start_x, p_start_y = sub_x[0], sub_y[0]
             p_end_x, p_end_y = sub_x[-1], sub_y[-1]
@@ -129,7 +143,6 @@ def make_pdf(vertices_csv, horizontal_csv, vertical_csv, pdf_out, route_id):
                 
             margin = 0.002
             
-            margin = 0.002
             bg_img = fetch_basemap_image(min(sub_lon)-margin, min(sub_lat)-margin, max(sub_lon)+margin, max(sub_lat)+margin)
             fig = plt.figure(figsize=(17, 11))
             rect = Rectangle((0.02, 0.02), 0.96, 0.96, linewidth=2, edgecolor='black', facecolor='none', transform=fig.transFigure)
@@ -173,10 +186,15 @@ def make_pdf(vertices_csv, horizontal_csv, vertical_csv, pdf_out, route_id):
                         ax_plan.annotate(annot, (label_x, c_y[mid_i]), xytext=(0, base_offset), textcoords='offset points', ha='center',
                                          arrowprops=dict(arrowstyle="->"), bbox=dict(boxstyle="round", fc="white"), zorder=5)
                         last_label_x = label_x
+            
+            mp_per_ft = (mp_array[-1] - mp_array[0]) / total_dist if total_dist > 0 else 0.0002
+            if mp_per_ft == 0: mp_per_ft = 0.0002
+            page_mp_span = PAGE_LENGTH_FT * mp_per_ft
+
             ax_plan.set_title("PLAN VIEW", fontweight='bold')
             ax_plan.set_ylabel("Offset (ft)")
-            ax_plan.set_ylim(-200, 200) 
-            ax_plan.set_xlim(mp_min, mp_max)       
+            ax_plan.set_ylim(-400, 400) 
+            ax_plan.set_xlim(mp_min, mp_min + page_mp_span)   
             ax_plan.grid(True, linestyle='--', alpha=0.5)
             ax_plan.legend(loc='lower right', fontsize=8)
             
@@ -222,11 +240,10 @@ def make_pdf(vertices_csv, horizontal_csv, vertical_csv, pdf_out, route_id):
             ax_prof.set_xlabel("Reference Point")
             
             avg_elev = np.mean(sub_elev)
-            ax_prof.set_xlim(mp_min, mp_max)
+            ax_prof.set_xlim(mp_min, mp_min + page_mp_span)
             ax_prof.set_ylim(avg_elev - 100, avg_elev + 100)           
             ax_prof.grid(True, linestyle='--', alpha=0.5)
             
-            # The missing profile legend is back!
             ax_prof.legend(loc='lower right', fontsize=8)
             pdf.savefig(fig)
             plt.close(fig)
@@ -238,13 +255,13 @@ def main():
     ap.add_argument("--pdf_out", required=True)
     ap.add_argument("--route_id", required=True)
     args = ap.parse_args()
-    make_pdf(
+    final_pdf_path = make_pdf(
         vertices_csv=args.vertices_csv,
         horizontal_csv=args.horizontal_csv,
         vertical_csv=args.vertical_csv,
         pdf_out=args.pdf_out,
         route_id=args.route_id
     )
-    print(f"Saved PDF: {args.pdf_out}")
+    print(f"Saved PDF: {final_pdf_path}")
 if __name__ == "__main__":
     main()
