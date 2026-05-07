@@ -57,7 +57,7 @@ DEFAULTS = {
     'H_MIN_CURVE_LENGTH_FT': 100.0,
     'H_MAX_RADIUS_FT': 165000.0,
     'H_LOOKAHEAD_DIST_M': 10.0,
-    'V_SMOOTH_FACTOR': 1800,
+    'V_SMOOTH_FACTOR': 800,
     'V_VC_THRESHOLD': 0.002,
     'V_MIN_CURVE_LENGTH_FT': 200.0,
     'V_GAP_TOLERANCE': 5,
@@ -472,16 +472,16 @@ def smooth_plan_profile_from_linestring(
     # --- VARIABLE STIFFNESS LOGIC ---
     if f_sys in [1, 2]:
         s_factor_h = params.get('H_SMOOTH_FACTOR', 800)
-        s_factor_v = params.get('V_SMOOTH_FACTOR', 1800)
+        s_factor_v = params.get('V_SMOOTH_FACTOR', 800)
     elif f_sys == 3:
         s_factor_h = params.get('H_SMOOTH_FACTOR_FS3', 600)
-        s_factor_v = params.get('V_SMOOTH_FACTOR_FS3', 1600)
+        s_factor_v = params.get('V_SMOOTH_FACTOR_FS3', 600)
     elif f_sys in [4, 5]:
         s_factor_h = params.get('H_SMOOTH_FACTOR_FS45', 400)
-        s_factor_v = params.get('V_SMOOTH_FACTOR_FS45', 1400)
+        s_factor_v = params.get('V_SMOOTH_FACTOR_FS45', 400)
     else:
         s_factor_h = params.get('H_SMOOTH_FACTOR_FS67', 200)
-        s_factor_v = params.get('V_SMOOTH_FACTOR_FS67', 1200)
+        s_factor_v = params.get('V_SMOOTH_FACTOR_FS67', 200)
     spacing_m = LineString(coords_m).length / (len(coords_m) - 1)
     d_axis = np.arange(len(coords_m)) * spacing_m
     sx = UnivariateSpline(d_axis, x_raw, s=s_factor_h)
