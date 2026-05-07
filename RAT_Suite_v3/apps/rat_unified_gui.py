@@ -88,7 +88,7 @@ class RATUnifiedGUI:
 
             "densify_spacing_ft": tk.StringVar(value="10"),
             "h_smooth_factor": tk.StringVar(value="800"),      # Functional systems 1 & 2
-            "v_smooth_factor": tk.StringVar(value="1800"),      # Functional systems 1 & 2
+            "v_smooth_factor": tk.StringVar(value="800"),      # Functional systems 1 & 2
             "h_min_delta": tk.StringVar(value="3.5"),
             "h_min_curve_length_ft": tk.StringVar(value="100"),
             "v_min_curve_length_ft": tk.StringVar(value="200"),
@@ -136,9 +136,9 @@ class RATUnifiedGUI:
             "H_SMOOTH_FACTOR_FS3": tk.IntVar(value="600"),
             "H_SMOOTH_FACTOR_FS45": tk.IntVar(value="400"),
             "H_SMOOTH_FACTOR_FS67": tk.IntVar(value="200"),
-            "V_SMOOTH_FACTOR_FS3": tk.IntVar(value="1600"),
-            "V_SMOOTH_FACTOR_FS45": tk.IntVar(value="1400"),
-            "V_SMOOTH_FACTOR_FS67": tk.IntVar(value="1200"),
+            "V_SMOOTH_FACTOR_FS3": tk.IntVar(value="600"),
+            "V_SMOOTH_FACTOR_FS45": tk.IntVar(value="400"),
+            "V_SMOOTH_FACTOR_FS67": tk.IntVar(value="200"),
         }
 
         self._build_ui()
@@ -533,7 +533,7 @@ class RATUnifiedGUI:
         defaults = {
             "densify_spacing_ft": "10",
             "h_smooth_factor": "800",
-            "v_smooth_factor": "1800",
+            "v_smooth_factor": "800",
             "h_min_delta": "3.5",
             "h_min_curve_length_ft": "100",
             "v_min_curve_length_ft": "200",
@@ -563,9 +563,9 @@ class RATUnifiedGUI:
             "H_SMOOTH_FACTOR_FS3": "600",
             "H_SMOOTH_FACTOR_FS45": "400",
             "H_SMOOTH_FACTOR_FS67": "200",
-            "V_SMOOTH_FACTOR_FS3": "1600",
-            "V_SMOOTH_FACTOR_FS45": "1400",
-            "V_SMOOTH_FACTOR_FS67": "1200"
+            "V_SMOOTH_FACTOR_FS3": "600",
+            "V_SMOOTH_FACTOR_FS45": "400",
+            "V_SMOOTH_FACTOR_FS67": "200"
         }
         for k, v in adv_defaults.items():
             if k in self.advanced_defaults:
