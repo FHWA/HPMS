@@ -83,7 +83,7 @@ You can launch the new centralized dashboard in one of two ways:
 
 ### 2. Configure Your Input Data
 Once the Unified GUI opens, set up your data source:
-* **Input File:** Click `Browse` and select your local HPMS data. The suite accepts standard `.csv`, `.shp`, or `.geojson` formats. *(Note: The file must contain a `RouteId` column and valid geometry/WKT).*
+* **Input File:** The suite defaults to the 2024 HPMS data on `https://data.transportation.gov/` at: `https://datahub.transportation.gov/resource/42um-tgh5.json`. To run using a different file, click `Browse` and select your local HPMS data. The suite accepts standard `.csv`, `.shp`, or `.geojson` formats. *(Note: The file must contain a `RouteId` column and valid geometry/WKT).*
 
 ### 3. Set Your Directories
 The tool needs to know where to save your reports and where to cache the heavy elevation data.
