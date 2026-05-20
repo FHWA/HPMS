@@ -65,6 +65,89 @@ RAT_Suite_v3.2/
 
 ---
 
+## Table of Contents
+
+- [Executive Summary](#executive-summary)
+- [Repository Structure](#rat-suite-v32---file-repository-structure)
+- [1. Overview](#1-overview)
+- [2. What Changed in Version 3.2](#2-what-changed-in-version-32)
+  - [2.1 National Smoothing Factor Calibration](#21-national-smoothing-factor-calibration-major-change)
+  - [2.2 Updated Default Smoothing Factors](#22-updated-default-smoothing-factors)
+  - [2.3 Enhanced Summary Dashboard](#23-enhanced-summary-dashboard)
+  - [2.4 Architectural and Code Quality Improvements](#24-architectural-and-code-quality-improvements)
+- [3. Suite Components](#3-suite-components)
+  - [3.1 Unified GUI](#31-unified-gui-rat_unified_guipy)
+  - [3.2 Mathematical and Geospatial Core](#32-mathematical-and-geospatial-core-rat_corepy)
+  - [3.3 Alignment CLI](#33-alignment-cli-rat_alignment_clipy)
+  - [3.4 Plan and Profile CLI](#34-plan-and-profile-cli-rat_plan_profile_clipy)
+  - [3.5 Plan and Profile PDF Renderer](#35-plan-and-profile-pdf-renderer-rat_plan_profile_report_pdfpy)
+  - [3.6 4D Enricher](#36-4d-enricher-hpms_4d_enricher_clipy)
+  - [3.7 National Calibration Engine](#37-national-calibration-engine-rat_national_calibration_clipy)
+  - [3.8 Validator](#38-validator-rat_results_validatorpy)
+- [4. Input Data and File Handling](#4-input-data-and-file-handling)
+  - [4.1 FHWA Socrata API](#41-fhwa-socrata-api)
+  - [4.2 Local HPMS Files](#42-local-hpms-files-shp-geojson-csv)
+- [5. Core Geometric and Analytical Methods](#5-core-geometric-and-analytical-methods)
+  - [5.1 Route Stitching and Geometry Consolidation](#51-route-stitching-and-geometry-consolidation)
+  - [5.2 Spline Smoothing](#52-spline-smoothing)
+  - [5.3 Heading Unwrapping](#53-heading-unwrapping)
+  - [5.4 Bridge and Water-Body Profile Repair](#54-bridge-and-water-body-profile-repair)
+  - [5.5 Curve Endpoint Detection](#55-curve-endpoint-detection)
+  - [5.6 Curve Geometry Computation](#56-curve-geometry-computation)
+  - [5.7 Minimum Apex Radius and Severity Classification](#57-minimum-apex-radius-and-severity-classification)
+  - [5.8 Linear Reference Proportional Calibration](#58-linear-reference-proportional-calibration)
+  - [5.9 Directionality and Compound Curves](#59-directionality-and-compound-curves)
+  - [5.10 Savitzky-Golay Buffer Requirement](#510-savitzky-golay-buffer-requirement)
+  - [5.11 Calculus-Based Horizontal Curvature](#511-calculus-based-horizontal-curvature)
+  - [5.12 Vertical Parabolic Fitting](#512-vertical-parabolic-fitting)
+  - [5.13 Functional System Scaling](#513-functional-system-scaling)
+- [6. Units of Measurement](#6-units-of-measurement)
+  - [6.1 Metric Core](#61-metric-core)
+  - [6.2 Imperial User Interface](#62-imperial-user-interface)
+- [7. Outputs and Intended Use](#7-outputs-and-intended-use)
+  - [7.1 Alignment Outputs](#71-alignment-outputs)
+  - [7.2 Plan and Profile Outputs](#72-plan-and-profile-outputs)
+  - [7.3 4D Enrichment Outputs](#73-4d-enrichment-outputs)
+  - [7.4 Calibration Outputs](#74-calibration-outputs)
+- [8. Practical Tuning Guidance](#8-practical-tuning-guidance)
+  - [8.1 Symptom-Based Adjustments](#81-symptom-based-adjustments)
+  - [8.2 Plan View and Profile View Display Adjustment](#82-plan-view-and-profile-view-display-adjustment)
+- [9. QA/QC and Validation Workflow](#9-qaqc-and-validation-workflow)
+- [10. Output Column Reference](#10-output-column-reference)
+  - [10.1 Universal Fields](#101-universal-fields)
+  - [10.2 Horizontal Curve Fields](#102-horizontal-curve-fields)
+  - [10.3 Vertical Curve Fields](#103-vertical-curve-fields)
+  - [10.4 Plan and Profile Vertex Fields](#104-plan-and-profile-vertex-fields)
+  - [10.5 4D Enrichment Fields](#105-4d-enrichment-fields)
+  - [10.6 Calibration Audit Fields](#106-calibration-audit-fields)
+- [11. Interactive Map and Dashboard](#11-interactive-map-and-dashboard)
+  - [11.1 HTML Alignment Map](#111-html-alignment-map)
+  - [11.2 Summary Dashboard](#112-summary-dashboard)
+  - [11.3 Plan and Profile Sensitivity Dashboard](#113-plan-and-profile-sensitivity-dashboard)
+- [12. Known Algorithmic Anomalies](#12-known-algorithmic-anomalies)
+  - [12.1 Orthogonal Stair-Step Digitization](#121-orthogonal-stair-step-digitization)
+  - [12.2 GPS Multipath Jitter](#122-gps-multipath-jitter)
+  - [12.3 LiDAR Water-Body Artifacts](#123-lidar-water-body-artifacts)
+  - [12.4 Collinear Vertex Redundancy](#124-collinear-vertex-redundancy)
+  - [12.5 Overpass Z-Spikes](#125-overpass-z-spikes)
+  - [12.6 Curve Endpoint Displacement](#126-curve-endpoint-displacement)
+- [13. Interpreting the Calibration Audit](#13-interpreting-the-calibration-audit)
+  - [13.1 Where to Start](#131-where-to-start)
+  - [13.2 Understanding Selection Methods](#132-understanding-selection-methods)
+  - [13.3 Reading the Confidence Score](#133-reading-the-confidence-score)
+  - [13.4 Identifying Outliers with Deviation from Default](#134-identifying-outliers-with-deviation-from-default)
+  - [13.5 Using the RMSE Columns for Validation](#135-using-the-rmse-columns-for-validation)
+  - [13.6 Making Manual Overrides](#136-making-manual-overrides)
+  - [13.7 Cross-State Consistency Check](#137-cross-state-consistency-check)
+- [Appendix A. Parameter Reference](#appendix-a-parameter-reference)
+  - [A.6 National Smoothing Factor Calibration](#a6-national-smoothing-factor-calibration)
+  - [A.7 Parameter Tuning Guidance](#a7-parameter-tuning-guidance)
+  - [A.8 Additional Adjustments](#a8-additional-adjustments)
+- [Appendix B. Tuning Playbooks](#appendix-b-tuning-playbooks)
+- [Appendix C. Glossary](#appendix-c-glossary)
+
+---
+
 ## 1. Overview
 
 The RAT Suite is an analytical derivation tool. It estimates operational curve attributes from observed, real-world geometry and elevation data rather than generating geometry from proposed design criteria. The suite is designed to ingest variable, human-digitized spatial networks and programmatically separate legitimate highway geometry from GPS multipath errors, digitization artifacts, and topographic noise.
@@ -153,7 +236,7 @@ The CLI also generates an HTML sensitivity analysis dashboard by slicing the rou
 
 ### 3.5 Plan and Profile PDF Renderer (`rat_plan_profile_report_pdf.py`)
 
-Generates multi-page engineering plan and profile PDFs from pre-processed vertex and curve CSVs. The renderer fetches USGS aerial basemap tiles, applies affine rotation so that the alignment flows left-to-right across each sheet, and uses Matplotlib GridSpec to produce stacked plan (top-down) and profile (elevation) views with full curve annotations. Pages are scaled to a 1,500-foot plan length.
+Generates multi-page engineering plan and profile PDFs from pre-processed vertex and curve CSVs. The renderer fetches USGS aerial basemap tiles, applies affine rotation so that the alignment flows left-to-right across each sheet, and uses `Matplotlib GridSpec` to produce stacked plan (top-down) and profile (elevation) views with full curve annotations. Pages are scaled to a 1,500-foot plan length.
 
 ### 3.6 4D Enricher (`hpms_4d_enricher_cli.py`)
 
@@ -178,7 +261,7 @@ Automated QA/QC module. Scans alignment CSV and 4D enriched outputs for required
 
 ### 4.1 FHWA Socrata API
 
-The primary input mode. The GUI connects to the FHWA HPMS Socrata database and filters by State FIPS code, functional system, and facility type before downloading data. The client applies a 120-second timeout per request and raises an error on non-2xx responses.
+The primary input mode. The GUI connects to the FHWA HPMS Socrata database and filters by State FIPS code, functional system, and facility type before downloading data. The client applies a 120-second timeout per request and raises an error on non-2xx responses. The URL for the API is: `https://datahub.transportation.gov/resource/42um-tgh5.json`.
 
 ### 4.2 Local HPMS Files (.shp, .geojson, .csv)
 
@@ -188,31 +271,55 @@ Local files are supported through the Use Local File option. If a shapefile is s
 
 ## 5. Core Geometric and Analytical Methods
 
-### 5.1 Spline Smoothing
+### 5.1 Route Stitching and Geometry Consolidation
 
-**The problem.** HPMS geometry is digitized from screen clicks or GPS collection and contains micro-scale positional noise that would produce false-positive curves if fed directly to a curvature algorithm.
+**The problem.** HPMS geometry is stored as a collection of independent tabular segments, each representing a discrete section of a route with its own `Start_MP`, `End_MP`, and geometry. A single Interstate route may be represented by thousands of individual segments. Processing these segments in isolation makes reliable curve detection impractical for two reasons:
+
+* **Segment length.** It isn't unusual for there to be segments that are 0.10 miles or shorter. A segment of this length contains insufficient geometry for the smoothing spline to establish a stable alignment. The spline requires a meaningful run of coordinated vertices on either side of any given point to correctly characterize the heading at that point, without that context, the computed curvature reflects the local geometry of a single short segment rather than the continuous arc of the road.
+
+* **Vertex distribution.** HPMS linework frequently exhibits uneven vertex spacing and localized vertex clumping within individual segments. The curvature algorithm relies on consistent vertex intervals to produce stable derivative estimates. Consolidating segments into a continuous route and redistributing vertices at a uniform interval (controlled by `DENSIFY_SPACING_FT`) eliminates both sparse sections where the spline has insufficient resolution and dense clusters where redundant collinear vertices produce near-zero curvature denominators.
+
+**The approach.** Before any smoothing or curvature analysis is performed, the `stitch_linestrings_ordered()` function in `rat_core.py` consolidates all segments for a route into one or more continuous LineStrings. The only condition that causes a route to break into separate LineStrings is a spatial gap between consecutive segment endpoints. The snap tolerance used to determine whether two endpoints are close enough to join is `1e-6 degrees` (approximately 0.1 meters). Gaps larger than that result in a new LineString, and all downstream output for that route will carry a `Part` index to distinguish results from each contiguous portion. The stitching process:
+
+1. Collects all segment geometries for the route and sorts them by Start_MP to establish the expected spatial order.
+
+2. Evaluates the endpoint proximity of each segment against its neighbor. If the end of one segment is within a configurable snap tolerance of the start of the next, the two are joined.
+
+3. Resolves directional inconsistency by comparing the endpoint of the preceding segment to both the start and end of the candidate segment. If the candidate's end point is closer than its start point, the segment is reversed before joining.
+
+4. Where a gap between segments exceeds the snap tolerance — indicating a genuine discontinuity such as a missing segment, a route split at a state line, or an unbridged water crossing — the stitcher begins a new LineString rather than forcing a connection. The resulting output may therefore contain multiple LineStrings for a single route, each representing a contiguous portion of the alignment. Downstream processing treats each portion independently and assigns a `Part` index to all output records so that results from disjointed geometry can be distinguished.
+
+**Why this matters for curve detection.** A smoothing spline fitted to a properly stitched continuous LineString produces heading and curvature values that reflect the actual roadway geometry. The same spline fitted to a raw fragmented segment produces values that are partially artifacts of where the segment happened to start and end. Route stitching is the prerequisite that makes all subsequent analysis geometrically meaningful.
+
+**Relationship to linear referencing.** After stitching, the engine uses the Start_MP and End_MP values from the source segments to establish proportional linear reference positions along the stitched geometry. This mapping is described in Section 5.7.
+
+**Note.** If routes are being split into an unexpectedly large number of parts, the snap tolerance may be too tight for the precision of the source data. This value can be adjusted by modifying the `snap_tol` default in `stitch_linestrings_ordered()` in `rat_core.py`.
+
+### 5.2 Spline Smoothing
+
+**The problem.** HPMS geometry is often digitized from screen clicks or GPS collection and contains micro-scale positional noise that would produce false-positive curves if fed directly to a curvature algorithm.
 
 **The approach.** The core engine applies a `scipy.interpolate.UnivariateSpline` to the UTM-projected coordinates. Horizontal (X, Y) and vertical (Z) smoothing are decoupled, allowing independent stiffness control. The spline smoothing factor controls the trade-off between fidelity to the raw geometry and geometric smoothness. State and functional-system-specific factors derived by the National Calibration Engine replace the uniform defaults used in prior versions.
 
-### 5.2 Heading Unwrapping
+### 5.3 Heading Unwrapping
 
 **The problem.** A road curving near true North will show a heading transition from approximately 359° to 1°, producing a false 358° deflection angle.
 
 **The approach.** The engine applies heading unwrapping, allowing the compass value to accumulate continuously (e.g., 359°, 360°, 361°) rather than resetting at 360°. Deflection angles are computed from the unwrapped heading series.
 
-### 5.3 Bridge and Water-Body Profile Repair
+### 5.4 Bridge and Water-Body Profile Repair
 
 **The problem.** USGS DEMs represent bare earth. Where a highway crosses a bridge, the DEM surface drops to the streambed or valley floor, producing artificial dips in the elevation profile.
 
 **The approach.** The core engine applies a valley test: if the road profile drops more than `DIP_THRESHOLD_FT` below the local topographic trend (estimated over `TREND_WINDOW_FT`), the engine suspends the road in the air and interpolates linearly across the gap. The maximum interpolation span is controlled by `BRIDGE_MAX_LEN_FT`. All downstream modules benefit from this repair because it is applied in the core before curve detection or 4D mapping.
 
-### 5.4 Curve Endpoint Detection
+### 5.5 Curve Endpoint Detection
 
 **Horizontal.** The engine calculates the road's compass heading at the `DENSIFY_SPACING_FT` interval. When the heading rate of change exceeds `H_MIN_HEAD_CHANGE`, a curve candidate is initiated.
 
 **Vertical.** The engine monitors the second derivative of the elevation profile. When the curvature of the grade exceeds `V_VC_THRESHOLD`, a vertical curve candidate is initiated.
 
-### 5.5 Curve Geometry Computation
+### 5.6 Curve Geometry Computation
 
 **Horizontal radius.** The engine computes instantaneous curvature κ at every point using the first and second spatial derivatives of the smoothed coordinates. Radius is derived as R = 1/κ. The reported `Radius_m` is the representative value across the curve span; `Min_Radius_m` is the minimum (apex) radius, which drives severity classification.
 
@@ -220,35 +327,35 @@ Local files are supported through the Use Local File option. If a shapefile is s
 
 **Vertical K-value.** The engine uses linear regression over the `REGRESSION_WINDOW_FT` window on each side of the vertical curve to estimate incoming grade G1 and outgoing grade G2. Algebraic difference A = G2 − G1. K-value = curve length / |A|.
 
-### 5.6 Minimum Apex Radius and Severity Classification
+### 5.7 Minimum Apex Radius and Severity Classification
 
 **The problem.** Real-world curves include spiral transitions. Averaging radius across a curve dilutes the severity of the apex.
 
 **The approach.** Severity bins (A–F) are assigned based on the minimum instantaneous radius (`Min_Radius_m`), not the mean radius. This approach is consistent with road safety analysis practices that identify the most restrictive geometric condition along the curve.
 
-### 5.7 Linear Reference Proportional Calibration
+### 5.8 Linear Reference Proportional Calibration
 
 Spline smoothing physically shortens the line. After smoothing, the engine maps curve positions back to the original linear reference system by computing what fraction of the total smoothed length each curve start and end position represents, then applying that fraction to the original `Start_MP` and `End_MP` range.
 
-### 5.8 Directionality and Compound Curves
+### 5.9 Directionality and Compound Curves
 
 **Left/Right.** A positive deflection angle from PC to PT (heading increasing) corresponds to a Right curve.
 
 **Compound curves.** When merge is enabled, the engine evaluates the gap between adjacent same-direction curves against `MERGE_GAP_FT` and fuses them into a compound curve. Reverse (S-curve) sequences are always kept separate to preserve the inflection point.
 
-### 5.9 Savitzky-Golay Buffer Requirement
+### 5.10 Savitzky-Golay Buffer Requirement
 
 The Savitzky-Golay filter (`scipy.signal.savgol_filter`) used in heading smoothing requires that the input have at least `H_BASE_SMOOTH_WINDOW + 2` points. The engine enforces this constraint by skipping route chunks with insufficient geometry rather than adjusting the window to avoid degraded results.
 
-### 5.10 Calculus-Based Horizontal Curvature
+### 5.11 Calculus-Based Horizontal Curvature
 
 Curvature κ is derived from the first and second spatial derivatives of the smoothed coordinate sequence with respect to arc length. Radius R = 1/κ at each point. This approach produces a continuous curvature function from which both apex and mean radius can be extracted.
 
-### 5.11 Vertical Parabolic Fitting
+### 5.12 Vertical Parabolic Fitting
 
 The engine applies second-degree polynomial regression (`numpy.polyfit`) to the smoothed elevation profile within each detected vertical curve span. Grade values at the PVC and PVT are derived from the first derivative of the fitted parabola. This produces grade values consistent with the parabolic assumption used in highway geometric design.
 
-### 5.12 Functional System Scaling
+### 5.13 Functional System Scaling
 
 Design standards and operating characteristics differ substantially across functional systems. An Interstate corridor has different smoothing requirements than a local collector. The engine selects horizontal and vertical smoothing factors based on the predominant functional system of each route. In version 3.2, these factors are loaded from `national_smoothing_factors.json` when available, providing state-specific calibration rather than uniform national defaults.
 
@@ -460,6 +567,14 @@ Some datasets contain densely packed collinear vertices on straight segments. Th
 ### 12.5 Overpass Z-Spikes
 
 Wide overpasses are occasionally misclassified as solid ground by the LiDAR processing algorithm, producing upward elevation spikes of 20 to 50 feet. The engine will attempt to fit a sharp CREST curve to this artifact. Increase `V_SMOOTH_FACTOR` to give the vertical spline sufficient stiffness to pass through the artifact without fitting a curve to it.
+
+### 12.6 Curve Endpoint Displacement
+
+The smoothing spline fits a globally continuous function across the full route rather than processing each curve in isolation. As a result, the spline begins responding to approaching curvature slightly before the physical curve starts, causing the detected PC and PT (or PVC and PVT for vertical curves) to extend into the adjacent tangent sections. The effect is more pronounced at higher smoothing factors and on curves with gradual transitions, and less pronounced on sharp curves where the curvature signal is strong relative to the spline window.
+
+This is a known limitation of spline-based alignment derivation from observed geometry. The plan and profile sheets display both the smoothed centerline and the raw input geometry simultaneously, which allows the analyst to visually assess the extent of endpoint displacement for any given curve.
+
+A correction method based on curvature threshold trimming is under development for a future release. The approach would identify the point along each detected curve where instantaneous curvature first exceeds a minimum significance threshold and report that trimmed position as the PC or PT, moving the endpoints inward from the spline-extended positions to where the curve is geometrically meaningful. Until that correction is implemented, reported `Calibrated_Start_MP` and `Calibrated_End_MP` values should be understood as conservative estimates that may slightly overstate curve length, particularly on lower-speed networks where shorter smoothing factors reduce but do not eliminate the effect.
 
 ---
 
