@@ -378,7 +378,7 @@ User-facing configuration parameters (spacing, curve length thresholds, merge ga
 ### 7.1 Alignment Outputs
 
 - Horizontal and vertical curve tables (CSV)
-- Alignment vertices file (CSV)
+- Alignment vertices file (CSV) — uses `Dist_Mi`; plan/profile vertices file uses `Dist_Ft`
 - Optional spatial exports (GeoJSON, GeoPackage, Shapefile)
 - Interactive HTML map with severity-classified curve styling
 - HTML summary dashboard including system health, density, severity distribution, and diagnostic charts
@@ -489,7 +489,8 @@ Recommended practice: run the alignment module, run the validator, review except
 | Field | Description |
 | :--- | :--- |
 | `Milepost` | Calibrated linear reference measure interpolated across the route bounds. |
-| `Dist_Ft` | Continuous distance axis in feet for PDF plotting. |
+| `Dist_Ft` | Continuous distance axis in feet. Used in the plan/profile vertices file for PDF page layout. |
+| `Dist_Mi` | Continuous distance axis in miles. Used in the alignment vertices file. Seeded from the route's actual starting milepost so it reflects position on the state network rather than resetting to zero. |
 | `Lon` / `Lat` | Smoothed coordinate (WGS84). |
 | `Elev_Ft` | Smoothed elevation in feet. |
 | `Raw_Lon` / `Raw_Lat` | Pre-smoothed coordinate reference. |
