@@ -111,6 +111,14 @@ Check the boxes for the output you want:
 Click the **RUN** button. 
 The GUI will lock its inputs and silently spin up the CLI scripts in the background. It will automatically download the required USGS DEMs, stitch the topography together, and generate your requested outputs. Check the log window at the bottom of the GUI to track its progress!
 
+## National Calibration Defaults
+The `core/` directory includes two pre-generated calibration files that ship with the repository:
+
+* **`national_smoothing_factors.json`:** State-specific horizontal and vertical smoothing factors for all 50 states, DC, and Puerto Rico, derived from the RAT National Calibration Engine using a full national sweep of HPMS data. These are loaded automatically by the GUI at run time and applied to the appropriate functional systems for the selected state.
+* **`calibration_audit.csv`:** A detailed record of the calibration sweep, including sample sizes, RMSE values, and the factor combinations tested for each state and functional system. Useful for understanding why a particular smoothing factor was selected for a given state.
+
+These files represent a specific calibration run and are provided as ready-to-use defaults so new users do not need to run a State or full national calibration sweep before processing data. They will be overwritten if you run the calibration engine against your own data, which is recommended if you are working with a state that has unusual geometry characteristics or if HPMS data has been significantly updated since the last sweep.
+
 ## Documentation
 For methodology, mathematical formulas, and parameter reference, see the **Technical Manual** (`docs/RAT_Suite_v3_2_Technical_Manual.md`). The `core/calibration_audit.csv` file documents the confidence scores and selection rationale for each state and functional system in the national smoothing parameter dictionary.
 
