@@ -378,6 +378,7 @@ User-facing configuration parameters (spacing, curve length thresholds, merge ga
 ### 7.1 Alignment Outputs
 
 - Horizontal and vertical curve tables (CSV)
+- Alignment vertices file (CSV)
 - Optional spatial exports (GeoJSON, GeoPackage, Shapefile)
 - Interactive HTML map with severity-classified curve styling
 - HTML summary dashboard including system health, density, severity distribution, and diagnostic charts
