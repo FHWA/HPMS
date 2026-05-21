@@ -19,7 +19,9 @@ RAT PLAN & PROFILE PDF RENDERER v3.2 (Matplotlib Generator)
 ROLE: Standalone visual engineering plan and profile sheet generator.
 DESCRIPTION: 
 Reads pre-processed vertex and curve CSVs to generate professional, multi-page 
-engineering PDFs. It fetches USGS aerial basemaps, rotates geometries so the 
+engineering PDFs. Expects the plan/profile vertices CSV format (which uses 
+Dist_Ft); not compatible with alignment vertices CSVs (which use Dist_Mi). 
+It fetches USGS aerial basemaps, rotates geometries so the 
 alignment flows left-to-right, and uses Matplotlib GridSpec to stack the Plan 
 (top-down) and Profile (elevation) views with full curve annotations.
 CHANGES FROM:
