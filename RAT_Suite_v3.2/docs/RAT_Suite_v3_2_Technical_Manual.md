@@ -577,6 +577,14 @@ This is a known limitation of spline-based alignment derivation from observed ge
 
 A correction method based on curvature threshold trimming is under development for a future release. The approach would identify the point along each detected curve where instantaneous curvature first exceeds a minimum significance threshold and report that trimmed position as the PC or PT, moving the endpoints inward from the spline-extended positions to where the curve is geometrically meaningful. Until that correction is implemented, reported `Calibrated_Start_MP` and `Calibrated_End_MP` values should be understood as conservative estimates that may slightly overstate curve length, particularly on lower-speed networks where shorter smoothing factors reduce but do not eliminate the effect.
 
+### 12.7 Vertical Curve Classification at Bridge Anchor Points
+
+The bridge detection algorithm in `fix_profile_by_deviation()` corrects the smoothed vertical profile at river crossings and other underpasses by interpolating a flat or gently graded line between anchor points on either side of the span. While the corrected profile elevation is geometrically accurate, the transition between the interpolated bridge line and the surrounding road grade can produce short SAG curve classifications at the anchor points. These are mathematical artifacts of the spline fitting at the boundary between the corrected and uncorrected profile segments, not genuine sag curves in the road geometry.
+
+These artifacts are most likely to appear at bridge crossings where the approach grades are gentle and the valley is wide, as these conditions produce the most gradual anchor point transitions. They do not affect the accuracy of the corrected elevation profile, and the associated curve lengths are typically short. However, they may appear in the vertical curve output and should be interpreted with caution at locations known to cross water features or other underpasses.
+
+A future refinement may suppress vertical curve classifications that fall within or immediately adjacent to detected bridge spans.
+
 ---
 
 ## 13. Interpreting the Calibration Audit
