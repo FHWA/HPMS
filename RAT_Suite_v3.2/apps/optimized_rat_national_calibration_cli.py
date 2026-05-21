@@ -79,6 +79,7 @@ import json
 import math
 import random
 import logging
+import argparse
 import requests
 import numpy as np
 import pandas as pd
@@ -110,14 +111,10 @@ SOCRATA_DEFAULT = "https://datahub.transportation.gov/resource/42um-tgh5.json"
 
 
 # ===========================================================================
-# USER CONFIGURATION BLOCK
+# CONSTANTS & DEFAULTS
 # ===========================================================================
+SOCRATA_DEFAULT = "https://datahub.transportation.gov/resource/42um-tgh5.json"
 
-STATES_TO_PROCESS = ["ALL"]  # Use "ALL" for national run.
-
-OUTPUT_DIR    = r""
-DEM_DIR       = r""
-SOCRATA_TOKEN = ""
 MAX_PARALLEL_STATES = max(1, __import__("os").cpu_count() - 2)  # Tune as needed
 
 BASE_ENGINE_PARAMS = {
@@ -920,17 +917,25 @@ def process_state(
 
 
 def main():
-    if not OUTPUT_DIR or not DEM_DIR:
-        logging.error("OUTPUT_DIR and DEM_DIR must be set in the configuration block.")
-        raise SystemExit(1)
+    parser = argparse.ArgumentParser(description="RAT National Calibration Engine")
+    parser.add_argument("--outdir",      required=True, help="Output directory")
+    parser.add_argument("--demdir",      required=True, help="DEM cache directory")
+    parser.add_argument("--state",       default="ALL", help="State FIPS code or ALL")
+    parser.add_argument("--params_json", default=None,  help="Path to run_params.json")
+    args = parser.parse_args()
 
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    os.makedirs(DEM_DIR,    exist_ok=True)
+    user_params = {}
+    if args.params_json and os.path.exists(args.params_json):
+        with open(args.params_json, "r") as f:
+            user_params = json.load(f)
 
-    base_params = build_params(BASE_ENGINE_PARAMS)
+    user_params.update({"OUTPUT_DIR": args.outdir, "DEM_DIR": args.demdir})
 
-    if "ALL" in [s.upper() for s in STATES_TO_PROCESS]:
-        states_list = ALL_FIPS
+    os.makedirs(args.outdir, exist_ok=True)
+    os.makedirs(args.demdir, exist_ok=True)
+
+    states_list = ALL_FIPS if args.state.upper() == "ALL" else [args.state.zfill(2)]
+    
         logging.info("ALL keyword detected. Initializing run for all 50 states + PR/DC.")
     else:
         states_list = STATES_TO_PROCESS
