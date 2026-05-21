@@ -934,12 +934,9 @@ def main():
     os.makedirs(args.outdir, exist_ok=True)
     os.makedirs(args.demdir, exist_ok=True)
 
-    states_list = ALL_FIPS if args.state.upper() == "ALL" else [args.state.zfill(2)]
-    
-        logging.info("ALL keyword detected. Initializing run for all 50 states + PR/DC.")
-    else:
-        states_list = STATES_TO_PROCESS
+    base_params = build_params(BASE_ENGINE_PARAMS)
 
+    states_list = ALL_FIPS if args.state.upper() == "ALL" else [args.state.zfill(2)]
     suite_root       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     master_json_path = os.path.join(suite_root, "core", "national_smoothing_factors.json")
     audit_csv_path   = os.path.join(suite_root, "core", "calibration_audit.csv")
