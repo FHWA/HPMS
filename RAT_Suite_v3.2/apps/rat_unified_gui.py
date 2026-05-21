@@ -1034,16 +1034,6 @@ class RATUnifiedGUI:
                     else:
                         logging.warning("No PDF report script found.")
 
-                    if p_pdf is not None:
-                        if p_pdf.stdout:
-                            logging.info(p_pdf.stdout.strip())
-                        if p_pdf.stderr:
-                            logging.info(p_pdf.stderr.strip())
-                        if p_pdf.returncode != 0:
-                            self._set_status("Error", f"PDF generation failed (exit code {p_pdf.returncode}).", busy=False)
-                            messagebox.showerror("PDF Failed", f"Plan/Profile PDF failed. Exit code {p_pdf.returncode}")
-                            return
-
             if self.vars["do_4d"].get() and os.path.exists(enrich_script):
                 run_any = True
                 self._set_status("4D Enrichment", "Running 4D enrichment module...", busy=True)
