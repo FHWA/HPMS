@@ -586,6 +586,10 @@ These artifacts are most likely to appear at bridge crossings where the approach
 
 A future refinement may suppress vertical curve classifications that fall within or immediately adjacent to detected bridge spans.
 
+### 12.8 Validator Coverage for New Output Files
+
+The Results Validator (`rat_results_validator.py`) currently checks the horizontal and vertical curve CSVs and the 4D enriched output. The alignment vertices file and section scores file introduced in v3.2 are not yet covered. A future update will add integrity checks for these outputs, including milepost continuity, bin value validity, and coordinate bounds.
+
 ---
 
 ## 13. Interpreting the Calibration Audit
