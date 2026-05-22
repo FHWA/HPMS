@@ -195,9 +195,22 @@ def build_params(user_params: Optional[Dict] = None) -> Dict:
 # ---------------------------------------------------------------------------
 # Centralized Data Loaders (Socrata & Local)
 # ---------------------------------------------------------------------------
-def fetch_socrata_state(state_fips: str, token: str = "") -> pd.DataFrame:
+def fetch_socrata_state(
+    state_fips: str,
+    token: str = "",
+    facility_type_filter: list = None,
+    fsystem_filter: list = None,
+) -> pd.DataFrame:
     headers = {"X-App-Token": token} if token else {}
-    where_clause = f"stateid='{state_fips}' AND facility_type IN ('1', '2')"
+
+    ft = facility_type_filter or [1, 2]
+    ft_clause = "AND facility_type IN (" + ", ".join(f"'{v}'" for v in ft) + ")"
+
+    fs_clause = ""
+    if fsystem_filter:
+        fs_clause = "AND f_system IN (" + ", ".join(f"'{v}'" for v in fsystem_filter) + ")"
+
+    where_clause = f"stateid='{state_fips}' {ft_clause} {fs_clause}".strip()
     params = {"$limit": 100_000, "$offset": 0, "$where": where_clause}
 
     rows = []
