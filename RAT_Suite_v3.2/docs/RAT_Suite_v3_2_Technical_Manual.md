@@ -131,6 +131,9 @@ RAT_Suite_v3.2/
   - [12.4 Collinear Vertex Redundancy](#124-collinear-vertex-redundancy)
   - [12.5 Overpass Z-Spikes](#125-overpass-z-spikes)
   - [12.6 Curve Endpoint Displacement](#126-curve-endpoint-displacement)
+  - [12.7 DEM Micro-Undulations](#127-dem-micro-undulations)
+  - [12.8 Vertical Curve Classification at Bridge Anchor Points](#128-vertical-curve-classification-at-bridge-anchor-points)
+  - [12.9 Validator Coverage for New Output Files](#129-validator-coverage-for-new-output-files)
 - [13. Interpreting the Calibration Audit](#13-interpreting-the-calibration-audit)
   - [13.1 Where to Start](#131-where-to-start)
   - [13.2 Understanding Selection Methods](#132-understanding-selection-methods)
@@ -578,7 +581,13 @@ This is a known limitation of spline-based alignment derivation from observed ge
 
 A correction method based on curvature threshold trimming is under development for a future release. The approach would identify the point along each detected curve where instantaneous curvature first exceeds a minimum significance threshold and report that trimmed position as the PC or PT, moving the endpoints inward from the spline-extended positions to where the curve is geometrically meaningful. Until that correction is implemented, reported `Calibrated_Start_MP` and `Calibrated_End_MP` values should be understood as conservative estimates that may slightly overstate curve length, particularly on lower-speed networks where shorter smoothing factors reduce but do not eliminate the effect.
 
-### 12.7 Vertical Curve Classification at Bridge Anchor Points
+### 12.7 DEM Micro-Undulations (Clustered Vertical Curves)
+
+In very flat terrain, 1/3 arc-second USGS DEMs contain sub-foot surface noise, and minor real-world features like box culverts or farm underpasses present as "micro-undulations." 
+
+If the `V_MIN_GRADE_CHANGE` is set too low (e.g., 0.5%), the highly accurate vertical smoothing spline will mathematically trace these 1-foot humps, generating massive clusters of false-positive "micro-curves" along otherwise flat corridors. Ensuring `V_MIN_GRADE_CHANGE` is set to the recommended default of 1.5% (or higher) filters out this surface noise and correctly consolidates the macro-profile.
+
+### 12.8 Vertical Curve Classification at Bridge Anchor Points
 
 The bridge detection algorithm in `fix_profile_by_deviation()` corrects the smoothed vertical profile at river crossings and other underpasses by interpolating a flat or gently graded line between anchor points on either side of the span. While the corrected profile elevation is geometrically accurate, the transition between the interpolated bridge line and the surrounding road grade can produce short SAG curve classifications at the anchor points. These are mathematical artifacts of the spline fitting at the boundary between the corrected and uncorrected profile segments, not genuine sag curves in the road geometry.
 
@@ -586,7 +595,7 @@ These artifacts are most likely to appear at bridge crossings where the approach
 
 A future refinement may suppress vertical curve classifications that fall within or immediately adjacent to detected bridge spans.
 
-### 12.8 Validator Coverage for New Output Files
+### 12.9 Validator Coverage for New Output Files
 
 The Results Validator (`rat_results_validator.py`) currently checks the horizontal and vertical curve CSVs and the 4D enriched output. The alignment vertices file and section scores file introduced in v3.2 are not yet covered. A future update will add integrity checks for these outputs, including milepost continuity, bin value validity, and coordinate bounds.
 
@@ -712,9 +721,12 @@ The following regional groupings are a useful starting point for consistency che
 | Parameter | Default | Units | Effect |
 | :--- | :---: | :---: | :--- |
 | `V_MIN_CURVE_LENGTH_FT` | 200 | ft | Minimum vertical curve length. |
-| `V_MIN_GRADE_CHANGE` | 0.5 | % | Minimum algebraic grade difference required to retain a vertical curve. |
+| `V_MIN_GRADE_CHANGE` | 1.5 | % | Minimum algebraic grade difference required to retain a vertical curve. |
 | `V_VC_THRESHOLD` | 0.002 | rate | Curvature sensitivity threshold for initiating vertical curve candidates. |
 | `V_MIN_OFFSET_FT` | 0.10 | ft | Minimum vertical offset significance filter. |
+
+**A Note on `V_MIN_GRADE_CHANGE` (1.5% Default):**
+This threshold acts as a critical physical low-pass filter. The suite relies on 1/3 arc-second USGS DEMs, which contain a baseline level of surface "noise." In flat terrain, this DEM chatter, along with minor real-world features like box culverts or road crowning, presents as sub-foot "micro-undulations." Enforcing a 1.5% minimum (roughly 1.5 to 2.0 feet of physical elevation change over a standard 250-foot curve) ensures the engine confidently ignores DEM noise and outputs near design-grade highway geometry suitable for macro-level HPMS reporting.
 
 ### Table 4. Bridge and Profile Repair
 
