@@ -79,8 +79,6 @@ DEFAULTS = {
     'H_MIN_DELTA':                 3.5,
     'H_MIN_CURVE_LENGTH_FT':       100.0,
     'H_MAX_RADIUS_FT':             165000.0,
-    'H_MIN_CURVE_LENGTH_URBAN_FT': 50.0,
-    'H_MIN_DELTA_URBAN':           5.0,
 
     # --- Vertical curve detection ---
     'V_VC_THRESHOLD':              0.002,
@@ -90,8 +88,6 @@ DEFAULTS = {
     'V_MIN_OFFSET_FT':             0.10,
     'V_REVERSAL_TOLERANCE':        0.02,
     'REGRESSION_WINDOW_FT':        500.0,
-    'V_MIN_CURVE_LENGTH_URBAN_FT': 80.0,
-    'V_MIN_GRADE_CHANGE_URBAN':    1.0,
 
     # --- Profile bridging ---
     'TREND_WINDOW_FT':             2000.0, # was 1000
@@ -182,10 +178,8 @@ def build_params(user_params: Optional[Dict] = None) -> Dict:
 
     p['DENSIFY_SPACING_M'] = p.get('DENSIFY_SPACING_FT', 10.0) / FEET_PER_METER
     p['H_MIN_CURVE_LENGTH_M'] = p.get('H_MIN_CURVE_LENGTH_FT', 100.0) / FEET_PER_METER
-    p['H_MIN_CURVE_LENGTH_URBAN_M'] = p.get('H_MIN_CURVE_LENGTH_URBAN_FT', 50.0) / FEET_PER_METER
     p['H_MAX_RADIUS'] = p.get('H_MAX_RADIUS_FT', 165000.0) / FEET_PER_METER
     p['V_MIN_CURVE_LENGTH'] = p.get('V_MIN_CURVE_LENGTH_FT', 200.0) / FEET_PER_METER
-    p['V_MIN_CURVE_LENGTH_URBAN'] = p.get('V_MIN_CURVE_LENGTH_URBAN_FT', 80.0) / FEET_PER_METER
     p['REGRESSION_WINDOW_M'] = p.get('REGRESSION_WINDOW_FT', 500.0) / FEET_PER_METER
     p['TREND_WINDOW_M'] = p.get('TREND_WINDOW_FT', 2000.0) / FEET_PER_METER # was 1000
     p['DIP_THRESHOLD_M'] = p.get('DIP_THRESHOLD_FT', 6.5) / FEET_PER_METER
@@ -250,7 +244,6 @@ def fetch_socrata_state(
         "begin_point": "Start_MP",
         "end_point":   "End_MP",
         "f_system":    "FSystem",
-        "urban_code":  "UrbanID",
         "facility_type": "Facility_Type"
     }
     df.rename(columns=col_map, inplace=True)
@@ -258,17 +251,12 @@ def fetch_socrata_state(
     if "Start_MP" not in df.columns: df["Start_MP"] = 0.0
     if "End_MP" not in df.columns: df["End_MP"] = 0.0
     if "FSystem" not in df.columns: df["FSystem"] = 1
-    if "UrbanID" not in df.columns: df["UrbanID"] = 99999
     if "Facility_Type" not in df.columns: df["Facility_Type"] = 2
 
     df["Start_MP"] = pd.to_numeric(df["Start_MP"], errors="coerce").fillna(0.0)
     df["End_MP"]   = pd.to_numeric(df["End_MP"],   errors="coerce").fillna(0.0)
     df["FSystem"]  = pd.to_numeric(df["FSystem"],  errors="coerce").fillna(1).astype(int)
-    df["UrbanID"] = pd.to_numeric(df["UrbanID"], errors="coerce").fillna(99999)
     df["Facility_Type"] = pd.to_numeric(df["Facility_Type"], errors="coerce").fillna(2).astype(int)
-    
-    df["Is_Urban"] = (df["UrbanID"] != 99999) & (df["UrbanID"] != 0)
-
     df = df[df["WKT"].notna() & (df["WKT"] != "")].copy()
     return df
 
@@ -296,7 +284,6 @@ def load_local_hpms(path: str) -> pd.DataFrame:
         elif c in ["begin_point", "start_mp", "bmp", "begin", "beg_mp"]: col_map[col] = "Start_MP"
         elif c in ["end_point", "end_mp", "emp", "end"]: col_map[col] = "End_MP"
         elif c in ["f_system", "fsystem", "func_sys"]: col_map[col] = "FSystem"
-        elif c in ["urban_id", "urbanid", "urban_code"]: col_map[col] = "UrbanID"
         elif c in ["facility_type", "fac_type", "facility_typ", "facilitytype"]: col_map[col] = "Facility_Type"
     df.rename(columns=col_map, inplace=True)
 
@@ -306,7 +293,6 @@ def load_local_hpms(path: str) -> pd.DataFrame:
     if "Start_MP" not in df.columns: df["Start_MP"] = 0.0
     if "End_MP" not in df.columns: df["End_MP"] = 0.0
     if "FSystem" not in df.columns: df["FSystem"] = 1
-    if "UrbanID" not in df.columns: df["UrbanID"] = 99999
     if "Facility_Type" not in df.columns: df["Facility_Type"] = 2
 
     df["RouteId"] = df["RouteId"].astype(str).str.strip().str.upper()
@@ -314,10 +300,6 @@ def load_local_hpms(path: str) -> pd.DataFrame:
     df["End_MP"] = pd.to_numeric(df["End_MP"], errors="coerce").fillna(0.0)
     df["FSystem"] = pd.to_numeric(df["FSystem"], errors="coerce").fillna(1).astype(int)
     df["Facility_Type"] = pd.to_numeric(df["Facility_Type"], errors="coerce").fillna(2).astype(int)
-    
-    df["UrbanID"] = pd.to_numeric(df["UrbanID"], errors="coerce").fillna(99999)
-    df["Is_Urban"] = (df["UrbanID"] != 99999) & (df["UrbanID"] != 0)
-
     df["WKT"] = df["WKT"].astype(str).str.strip()
     df = df[df["WKT"].notna() & (df["WKT"] != "")].copy()
     return df
@@ -535,8 +517,7 @@ def classify_grade_bin(pct: float) -> str:
 def analyze_horizontal_curvature(
         coords_m_smooth: List[Tuple[float, float]], 
         spacing_m: float, 
-        params: Dict,
-        is_urban: bool = False
+        params: Dict
     ) -> List[Dict]:
     xs = np.array([c[0] for c in coords_m_smooth], dtype=float)
     ys = np.array([c[1] for c in coords_m_smooth], dtype=float)
@@ -559,8 +540,8 @@ def analyze_horizontal_curvature(
     kappa_thresh = 1.0 / max(params['H_MAX_RADIUS'], 1e-6)
     is_curve = kappa >= kappa_thresh
     
-    min_len = params.get('H_MIN_CURVE_LENGTH_URBAN_M', 15.24) if is_urban else params['H_MIN_CURVE_LENGTH_M']
-    min_delta = params.get('H_MIN_DELTA_URBAN', 5.0) if is_urban else params['H_MIN_DELTA']
+    min_len = params['H_MIN_CURVE_LENGTH_M']
+    min_delta = params['H_MIN_DELTA']
     
     # Calculate headings globally before looping
     headings_array = calculate_headings(list(zip(xs, ys)))
@@ -600,9 +581,9 @@ def analyze_horizontal_curvature(
             'Start_Dist': s * spacing_m,
             'End_Dist': e * spacing_m,
             'Length_m': length,
-            'Length': length,
+            'Length_ft': length * FEET_PER_METER,
             'Radius_m': radius,
-            'Radius': radius,
+            'Radius_ft': radius * FEET_PER_METER,
             'Min_Radius_m': min_radius,
             'Delta': float(delta),
             'Dir': direction,
@@ -643,14 +624,13 @@ def merge_horizontal_curves(curves: List[Dict], params: Dict) -> List[Dict]:
 def analyze_vertical_parabolic(
         z_smooth: np.ndarray, 
         spacing_m: float, 
-        params: Dict,
-        is_urban: bool = False
+        params: Dict
     ) -> List[Dict]:
     grads = np.gradient(z_smooth, spacing_m) * 100.0
     gchg = np.gradient(grads, spacing_m)
     is_vc = np.abs(gchg) > params['V_VC_THRESHOLD']
-    min_len = params.get('V_MIN_CURVE_LENGTH_URBAN', 24.38) if is_urban else params['V_MIN_CURVE_LENGTH']
-    min_g_change = params.get('V_MIN_GRADE_CHANGE_URBAN', 1.0) if is_urban else params['V_MIN_GRADE_CHANGE']
+    min_len = params['V_MIN_CURVE_LENGTH']
+    min_g_change = params['V_MIN_GRADE_CHANGE']
     curves = []
     n = len(z_smooth)
     i = 0
@@ -710,7 +690,7 @@ def analyze_vertical_parabolic(
             'Start_Dist': s * spacing_m,
             'End_Dist': e * spacing_m,
             'Length_m': length,
-            'Length': length,
+            'Length_ft': length * FEET_PER_METER,
             'Grade_In': g1,
             'Grade_Out': g2,
             'Alg_Diff': A,
