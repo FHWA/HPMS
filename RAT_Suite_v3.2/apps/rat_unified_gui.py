@@ -92,7 +92,7 @@ class RATUnifiedGUI:
             "h_min_delta": tk.StringVar(value="3.5"),
             "h_min_curve_length_ft": tk.StringVar(value="100"),
             "v_min_curve_length_ft": tk.StringVar(value="200"),
-            "v_min_grade_change": tk.StringVar(value="0.5"),
+            "v_min_grade_change": tk.StringVar(value="1.5"),
 
             "enable_merge": tk.BooleanVar(value=False),
             "merge_gap_ft": tk.StringVar(value="600"),
@@ -617,7 +617,7 @@ class RATUnifiedGUI:
             "h_min_delta":           "3.5",
             "h_min_curve_length_ft": "100",
             "v_min_curve_length_ft": "200",
-            "v_min_grade_change":    "0.5",
+            "v_min_grade_change":    "1.5",
             "enable_merge":          False,
             "merge_gap_ft":          "600",
             "v_merge_gap_ft":        "1500",
