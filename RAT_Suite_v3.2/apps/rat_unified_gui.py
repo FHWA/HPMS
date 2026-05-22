@@ -835,6 +835,14 @@ class RATUnifiedGUI:
                 url = self.vars["input_url"].get().strip() or SOCRATA_DEFAULT
                 state = self.vars["state_fips"].get().strip()
                 fsys = [str(k) for k, v in self.fsys_vars.items() if v.get()]
+                
+                # -> NEW: Collect checked facility types from the GUI variables
+                facs = [
+                    str(fac_val) for fac_val, var_name in 
+                    [(1, "fac_1"), (2, "fac_2"), (4, "fac_4"), (5, "fac_5"), (6, "fac_6"), (7, "fac_7")] 
+                    if self.vars[var_name].get()
+                ]
+                
                 token = self.vars["socrata_token"].get().strip()
 
                 where_parts = []
@@ -843,6 +851,12 @@ class RATUnifiedGUI:
                 if fsys:
                     fs = ",".join([f"'{x}'" for x in fsys])
                     where_parts.append(f"f_system IN ({fs})")
+                    
+                # -> NEW: Append facility types to the Socrata API query
+                if facs:
+                    fc = ",".join([f"'{x}'" for x in facs])
+                    where_parts.append(f"facility_type IN ({fc})")
+                    
                 where_clause = " AND ".join(where_parts) if where_parts else ""
 
                 headers = {"X-App-Token": token} if token else {}

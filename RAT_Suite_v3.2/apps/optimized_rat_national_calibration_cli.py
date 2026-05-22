@@ -231,10 +231,23 @@ def cochran_sample_size(population, confidence=0.95, margin_of_error=0.05, p=0.5
 # SOCRATA FETCH
 # ===========================================================================
 
-def fetch_socrata_state(state_fips: str, token: str = "") -> pd.DataFrame:
-    headers      = {"X-App-Token": token} if token else {}
-    where_clause = f"stateid='{state_fips}' AND facility_type IN ('1', '2')"
-    params       = {"$limit": 100_000, "$offset": 0, "$where": where_clause}
+def fetch_socrata_state(
+    state_fips: str,
+    token: str = "",
+    facility_type_filter: list = None,
+    fsystem_filter: list = None,
+) -> pd.DataFrame:
+    headers = {"X-App-Token": token} if token else {}
+
+    ft = facility_type_filter or [1, 2]
+    ft_clause = "AND facility_type IN (" + ", ".join(f"'{v}'" for v in ft) + ")"
+
+    fs_clause = ""
+    if fsystem_filter:
+        fs_clause = "AND f_system IN (" + ", ".join(f"'{v}'" for v in fsystem_filter) + ")"
+
+    where_clause = f"stateid='{state_fips}' {ft_clause} {fs_clause}".strip()
+    params = {"$limit": 100_000, "$offset": 0, "$where": where_clause}
 
     rows = []
     logging.info(f"Fetching Socrata data for State FIPS {state_fips}...")

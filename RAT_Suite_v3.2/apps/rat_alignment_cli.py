@@ -692,7 +692,23 @@ def run_state_alignment(state_fips: str, out_dir: str, dem_dir: str, user_params
     logging.info(f"\n{'='*60}\n=== ALIGNMENT PROCESSING: STATE {state_fips} ===\n{'='*60}")
     params = build_params(user_params)
     try:
-        df = local_df.copy() if local_df is not None else fetch_socrata_state(state_fips, user_params.get("SOCRATA_TOKEN", ""))
+        if local_df is not None:
+            df = local_df.copy()
+            # Apply GUI filters to local data
+            fac_filter = user_params.get("FACILITY_TYPE_FILTER")
+            if fac_filter is not None:
+                df = df[df["Facility_Type"].isin(fac_filter)]
+                
+            fsys_filter = user_params.get("FSYSTEM_FILTER")
+            if fsys_filter is not None:
+                df = df[df["FSystem"].isin(fsys_filter)]
+        else:
+            df = fetch_socrata_state(
+                state_fips,
+                user_params.get("SOCRATA_TOKEN", ""),
+                facility_type_filter=user_params.get("FACILITY_TYPE_FILTER"),
+                fsystem_filter=user_params.get("FSYSTEM_FILTER"),
+            )
     except Exception as e:
         logging.error(f"Failed to fetch data: {e}"); return
 

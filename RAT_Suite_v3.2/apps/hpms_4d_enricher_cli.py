@@ -181,8 +181,21 @@ def run_state_enrichment(state_fips: str, out_dir: str, dem_dir: str, user_param
     try:
         if local_df is not None:
             df = local_df.copy()
+            # Apply GUI filters to local data
+            fac_filter = user_params.get("FACILITY_TYPE_FILTER")
+            if fac_filter is not None:
+                df = df[df["Facility_Type"].isin(fac_filter)]
+                
+            fsys_filter = user_params.get("FSYSTEM_FILTER")
+            if fsys_filter is not None:
+                df = df[df["FSystem"].isin(fsys_filter)]
         else:
-            df = fetch_socrata_state(state_fips, user_params.get("SOCRATA_TOKEN", ""))
+            df = fetch_socrata_state(
+                state_fips,
+                user_params.get("SOCRATA_TOKEN", ""),
+                facility_type_filter=user_params.get("FACILITY_TYPE_FILTER"),
+                fsystem_filter=user_params.get("FSYSTEM_FILTER"),
+            )
     except Exception as e:
         logging.error(f"Failed to fetch data for State {state_fips}: {e}")
         return
