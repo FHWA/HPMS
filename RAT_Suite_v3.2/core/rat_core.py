@@ -84,7 +84,7 @@ DEFAULTS = {
     'V_VC_THRESHOLD':              0.002,
     'V_MIN_CURVE_LENGTH_FT':       200.0,
     'V_GAP_TOLERANCE':             5,
-    'V_MIN_GRADE_CHANGE':          0.5,
+    'V_MIN_GRADE_CHANGE':          1.5,
     'V_MIN_OFFSET_FT':             0.10,
     'V_REVERSAL_TOLERANCE':        0.02,
     'REGRESSION_WINDOW_FT':        500.0,
