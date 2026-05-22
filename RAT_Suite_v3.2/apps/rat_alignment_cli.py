@@ -71,6 +71,7 @@ def build_vertices_df(
     res: dict,
     route_id: str,
     f_sys: int,
+    state_id: str,
     chunk_s_mp: float,
     chunk_e_mp: float,
     global_start_dist_m: float,
@@ -105,6 +106,7 @@ def build_vertices_df(
         mp            = chunk_s_mp + frac * (chunk_e_mp - chunk_s_mp)
         continuous_ft = (global_start_dist_m + local_dist_m) * FEET_PER_METER
         rows.append({
+            "State_ID":                 state_id,
             "RouteId":                  route_id,
             "FSystem":                  f_sys,
             "Milepost":                  round(mp, 4),
@@ -202,10 +204,19 @@ def process_route(route_id: str, subset: pd.DataFrame, dem_dir: str, params: dic
     
     f_sys = int(subset["FSystem"].mode()[0])
     
+    state_val = "LOCAL"
+    for col in subset.columns:
+        if col.lower() in ["state", "state_fips", "state_id", "stateid"]:
+            state_val = str(subset[col].iloc[0])
+            break
+    
+    if state_val == "LOCAL":
+        state_val = str(params.get("STATE_FIPS", "LOCAL"))
+    
     all_chunks = []
     lines = stitch_linestrings_ordered(subset["WKT"].tolist())
     for g in lines:
-        all_chunks.append({"geom": g, "f_sys": f_sys})
+        all_chunks.append({"geom": g, "f_sys": f_sys, "state_id": state_val})
 
     if not all_chunks:
         return [], [], [], []
@@ -309,7 +320,7 @@ def process_route(route_id: str, subset: pd.DataFrame, dem_dir: str, params: dic
         # ── Vertices ────────────────────────────────────────────────────────
         try:
             vtx_df = build_vertices_df(
-                res, route_id, info["f_sys"],
+                res, route_id, info["f_sys"], info["state_id"],
                 chunk_start_mp, chunk_end_mp,
                 global_continuous_dist_m, params,
             )

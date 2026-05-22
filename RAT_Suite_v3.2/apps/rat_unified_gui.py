@@ -948,11 +948,10 @@ class RATUnifiedGUI:
                     "begin_point": "Start_MP",
                     "end_point": "End_MP",
                     "f_system": "FSystem",
-                    "urban_id": "UrbanID",
                     "facility_type": "Facility_Type"
                 }
                 df.rename(columns=rename_map, inplace=True)
-                keep_cols = [c for c in ["RouteId", "Start_MP", "End_MP", "FSystem", "UrbanID", "Facility_Type", "WKT"] if c in df.columns]
+                keep_cols = [c for c in ["RouteId", "Start_MP", "End_MP", "FSystem", "Facility_Type", "WKT"] if c in df.columns]
                 df = df[keep_cols].dropna(subset=["WKT"]).copy()
 
                 input_path = os.path.join(out_dir, "socrata_input_extract.csv")
