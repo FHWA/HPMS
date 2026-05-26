@@ -29,7 +29,7 @@ HPMS roadway geometry is frequently fragmented, noisy, and geometrically inconsi
 | Validating methods and mathematics | Core Geometric Methods, Units, Output Fields, QA/Validator |
 | Generating plan and profile sheets | Plan/Profile Workflows, PDF Annotation Interpretation |
 | Creating 3D/4D geometry | 4D Workflows, 4D Output Fields |
-| National calibration and smoothing factors | Section 3.7, Appendix A.6 |
+| National calibration and smoothing factors | Section 3.7, Section 13, Appendix A.6 |
 | Program management and policy review | Executive Summary, Practical Tuning Guidance, Limitations |
 
 **Scope and Intended Use**
@@ -206,6 +206,8 @@ The alignment CLI dashboard now includes four additional charts and improved sys
 - Corrected `SIMPLIFY_GEOMETRY` / `simplify_geometry` key casing inconsistency between the GUI and export functions.
 - Corrected `page_mp_span` unbound variable risk in the PDF renderer.
 - Added `geopandas` import required for local file processing in `rat_core.py`.
+- `fetch_socrata_state()` now accepts `facility_type_filter` and `fsystem_filter` parameters, building the Socrata where clause dynamically from user selections rather than using a hardcoded filter. All CLI modules pass these parameters from `run_params.json`.
+- Added malformed JSON protection in `rat_unified_gui.py` for Socrata paginated responses; truncated server responses now trigger a retry with exponential backoff rather than crashing the run.
 
 ---
 
@@ -265,6 +267,8 @@ Automated QA/QC module. Scans alignment CSV and 4D enriched outputs for required
 ### 4.1 FHWA Socrata API
 
 The primary input mode. The GUI connects to the FHWA HPMS Socrata database and filters by State FIPS code, functional system, and facility type before downloading data. The client applies a 120-second timeout per request and raises an error on non-2xx responses. The URL for the API is: `https://datahub.transportation.gov/resource/42um-tgh5.json`.
+
+**Note:** HPMS facility type codes follow the HPMS Field Manual definitions: 1 = One-Way Roadway, 2 = Two-Way Roadway, 4 = Ramp, 5 = Non-Mainline, 6 = Non-Inventory Direction, 7 = Planned/Unbuilt. The default filter includes types 1 and 2 (mainline roadways only). Including type 4 will add interchange ramps to the output, which will produce short curves and atypical geometry in the alignment results.
 
 ### 4.2 Local HPMS Files (.shp, .geojson, .csv)
 
@@ -419,6 +423,7 @@ File names follow the convention `plan_profile_<RouteId>_MP_<begin>_to_<end>`.
 | Noisy vertical output | Increase `V_SMOOTH_FACTOR`; increase `V_MIN_CURVE_LENGTH_FT`; increase `V_MIN_GRADE_CHANGE` |
 | Bridge dips remain in profile | Increase `TREND_WINDOW_FT`; decrease `DIP_THRESHOLD_FT`; increase `BRIDGE_MAX_LEN_FT` |
 | Overpass spikes appear as false CREST curves | Increase `V_SMOOTH_FACTOR` |
+| Ramps or non-mainline geometry appearing in output | Verify FACILITY_TYPE_FILTER in the GUI includes only types 1 and 2; type 4 is ramps |
 
 ### 8.2 Plan View and Profile View Display Adjustment
 
@@ -543,7 +548,7 @@ The summary dashboard (`alignment_dashboard_<state>_<date>.html`) provides the f
 * **Severity by Functional System:** Stacked bar charts showing severity class distribution per FS.
 * **CREST vs. SAG:** Vertical curve type counts by functional system.
 * **Compound Curve Percentage:** Fraction of horizontal curves classified as compound by FS.
-* **Advanced Diagnostics:* Curve length vs. radius scatter plot and K-value distribution histogram.
+* **Advanced Diagnostics:** Curve length vs. radius scatter plot and K-value distribution histogram.
 
 ### 11.3 Plan and Profile Sensitivity Dashboard
 
@@ -800,30 +805,36 @@ Controls the stiffness of the elevation profile spline.
 
 ## Appendix B. Tuning Playbooks
 
-**Playbook 1 — Too many statewide horizontal curves**
+**Playbook 1 - Too many statewide horizontal curves**
 1. Increase `H_SMOOTH_FACTOR`
 2. Increase `H_MIN_DELTA`
 3. Increase `H_MIN_CURVE_LENGTH_FT`
 4. Revalidate on sample corridors before full rerun
 
-**Playbook 2 — Curves missing on lower-speed networks**
+**Playbook 2 - Curves missing on lower-speed networks**
 1. Decrease `DENSIFY_SPACING_FT`
 2. Decrease `H_SMOOTH_FACTOR` or apply a lower FS-specific override
 3. Decrease `H_MIN_CURVE_LENGTH_FT`
 4. Validate against known geometry
 
-**Playbook 3 — Bridge dips remaining in vertical outputs**
+**Playbook 3 - Bridge dips remaining in vertical outputs**
 1. Increase `TREND_WINDOW_FT`
 2. Decrease `DIP_THRESHOLD_FT`
 3. Review `BRIDGE_MAX_LEN_FT`
 4. Re-run targeted bridge corridors and inspect profiles
 
-**Playbook 4 — State-specific calibration result needs review**
+**Playbook 4 - State-specific calibration result needs review**
 1. Open `calibration_audit.csv` and filter `override_recommended = True`
 2. Review `selection_method`, `confidence_score`, `n_passing`, and `deviation_from_default` for flagged entries
 3. Compare `v_rmse_at_selected` and `h_rmse_at_selected` against neighboring states with similar terrain
 4. Edit the relevant entry in `national_smoothing_factors.json` with the corrected values
 5. Re-run alignment on benchmark routes for the affected state to confirm
+
+** Playbook 5 - Ramps or unexpected facility types in output**
+1. Check `FACILITY_TYPE_FILTER` in the GUI, confirm it contains only `[1, 2]` for mainline-only processing
+2. If running via CLI directly, verify `run_params.json` has `"FACILITY_TYPE_FILTER": [1, 2]`
+3. Re-run the affected state; the filter is applied at the Socrata query level so no post-processing is needed
+4. If local file input is being used, apply a pre-filter on the `Facility_Type` column before passing to the suite
 
 ---
 
