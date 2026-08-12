@@ -13,12 +13,6 @@
 # For more information, please see the LICENSE file or visit:
 # https://creativecommons.org/publicdomain/zero/1.0/
 
-# to run: (delete this section before posting to GitHub)
-# cd "C:\Users\David.Winter\OneDrive - DOT OST\HPPI - Working Documents (HPPI)\Shared Code\Other Code\Python\Test\RAT_Suite v3.3" 
-# (single state): py tools/rat_national_calibration_cli.py --outdir  "...output" --demdir  "S:/HPPI/HPMS Curve_Grade/HPMS_DEM_Cache" --state   31
-# (all states, 30 cores, hold 2 back): py tools/rat_national_calibration_cli.py --outdir  "...output" --demdir  "S:/HPPI/HPMS Curve_Grade/HPMS_DEM_Cache" --state   ALL --total-cores   30 --reserved-cores 2
-# (all states, save terminal output): py tools/rat_national_calibration_cli.py --outdir "C:/Users/David.Winter/OneDrive - DOT OST/HPPI - Working Documents (HPPI)/Shared Code/Other Code/Python/Test/RAT_Suite v3.3/output" --demdir "S:/HPPI/HPMS Curve_Grade/HPMS_DEM_Cache" --state ALL --total-cores 30 --reserved-cores 2 2>&1 | Tee-Object -FilePath "C:/Users/David.Winter/OneDrive - DOT OST/HPPI - Working Documents (HPPI)/Shared Code/Other Code/Python/Test/RAT_Suite v3.3/output/calibration_run_log.txt"
-
 # Examples: Run from the RAT Suite root directory:
 #
 #   Single state (Nebraska):
