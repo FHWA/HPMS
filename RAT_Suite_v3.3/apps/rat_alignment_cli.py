@@ -149,7 +149,6 @@ def build_vertices_df(
         "Micro_Jitter_Inches":      np.round(iri_proxy, 4),
         "Available_Sight_Dist_Ft":  np.round(asd, 1),
     })
-    return pd.DataFrame(rows)
 
 
 # ===========================================================================
@@ -468,7 +467,43 @@ def process_route(route_id: str, subset: pd.DataFrame, dem_dir: str, params: dic
                 chunk_start_mp, chunk_end_mp,
                 global_start_dist_m, params,
             )
-            # ... lots of code ...
+            # Tag each vertex with the curve type and bin at that point
+            vtx_df["Part"] = chunk_start_mp
+            vtx_df["H_Curve_Type"] = "Tangent"
+            vtx_df["V_Curve_Type"] = "Tangent"
+            vtx_df["H_Curve_Bin"]  = "A"
+            vtx_df["V_Grade_Bin"]  = "A"
+            
+            # ====================================================================
+            # BATCH ENGINE: HPMS REPORTED IRI VERTEX MAPPER
+            # ====================================================================
+            vtx_df['IRI_Reported'] = np.nan
+            # Safely catch lowercase 'iri' or uppercase 'IRI' from different state conventions
+            iri_col = next((c for c in subset.columns if c.upper() == 'IRI'), None)
+            if iri_col:
+                for _, row in subset.iterrows():
+                    mask = (vtx_df["Milepost"] >= row["Start_MP"]) & (vtx_df["Milepost"] <= row["End_MP"])
+                    vtx_df.loc[mask, "IRI_Reported"] = pd.to_numeric(row[iri_col], errors='coerce')
+            # ====================================================================
+            for c in h_curves:
+                s_mi = c["Start_Dist"] / 1609.344
+                e_mi = c["End_Dist"]   / 1609.344
+                mask = (vtx_df["Dist_Mi"] >= s_mi) & (vtx_df["Dist_Mi"] <= e_mi)
+                vtx_df.loc[mask, "H_Curve_Type"] = c["Dir"]
+                vtx_df.loc[mask, "H_Curve_Bin"]  = c["Bin"]
+            for c in v_curves:
+                s_mi = c["Start_Dist"] / 1609.344
+                e_mi = c["End_Dist"]   / 1609.344
+                mask = (vtx_df["Dist_Mi"] >= s_mi) & (vtx_df["Dist_Mi"] <= e_mi)
+                vtx_df.loc[mask, "V_Curve_Type"] = c["Type"]
+                vtx_df.loc[mask, "V_Grade_Bin"]  = c["Grade_Bin"]
+                
+                # False Valley Detector
+                c["False_Valley_Warning"] = False
+                if c["Type"] == "SAG" and mask.any():
+                    overlapping_tiers = vtx_df.loc[mask, "Structure_Tier"].unique()
+                    if "1_HPMS" in overlapping_tiers or "2_NBI" in overlapping_tiers:
+                        c["False_Valley_Warning"] = True
             vtx_dfs.append(vtx_df)
         except KeyError as e:
             # Missing required field in the result dictionary
