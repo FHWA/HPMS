@@ -13,13 +13,6 @@
 # For more information, please see the LICENSE file or visit:
 # https://creativecommons.org/publicdomain/zero/1.0/
 
-# to run:  (delete this before posting to GitHub)
-# cd "C:\Users\David.Winter\OneDrive - DOT OST\HPPI - Working Documents (HPPI)\Shared Code\Other Code\Python\Test\RAT_Suite v3.3"  (delete this before posting to GitHub)
-# py tools/rat_calibration_diagnostics.py --audit "core/calibration_audit.csv" --outdir "output/diagnostics"  (delete this before posting to GitHub)
-# Example: Run from the RAT Suite root directory:
-#   python tools/rat_calibration_diagnostics.py --audit core/calibration_audit.csv --outdir output/diagnostics
-
-
 """
 RAT CALIBRATION THRESHOLD DIAGNOSTICS v1.0
 --------------------------------------------------------------------------------
