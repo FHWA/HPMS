@@ -551,7 +551,8 @@ def export_intersections_gpkg(df_vtx: pd.DataFrame, out_path: str):
         
         base_data = {
             "Topology_Node": row["Topology_Node"],
-            "Elev_Ft": row["Elev_Ft"],
+            "Elev_A_Ft": row["Elev_Ft"],          
+            "Elev_Diff_Ft": row["Elev_Diff_Ft"],   
             "Lon": row["Lon"],
             "Lat": row["Lat"],
             "Route_A": route_a,
@@ -565,8 +566,10 @@ def export_intersections_gpkg(df_vtx: pd.DataFrame, out_path: str):
                 mirror_row = mirror_row.iloc[0]
             seen_pairs.add(mirror_key)
             base_data["MP_B"] = mirror_row["Milepost"]
+            base_data["Elev_B_Ft"] = mirror_row["Elev_Ft"]   
         else:
             base_data["MP_B"] = None
+            base_data["Elev_B_Ft"] = None                    
             
         combined_rows.append(base_data)
 
@@ -697,7 +700,9 @@ def generate_html_map(df_h, df_v, df_vtx, out_html, params):
                     seen_pairs.add(mirror_key)
                     combined_rows.append({
                         "Topology_Node": row["Topology_Node"],
-                        "Elev_Ft": row["Elev_Ft"],
+                        "elev_a": row["Elev_Ft"],                    
+                        "elev_b": mirror_row["Elev_Ft"],             
+                        "elev_diff": row["Elev_Diff_Ft"],            
                         "Lat": row["Lat"], "Lon": row["Lon"],
                         "route_a": route_a, "mp_a": row["Milepost"],
                         "route_b": route_b, "mp_b": mirror_row["Milepost"],
@@ -706,7 +711,9 @@ def generate_html_map(df_h, df_v, df_vtx, out_html, params):
                 else:
                     combined_rows.append({
                         "Topology_Node": row["Topology_Node"],
-                        "Elev_Ft": row["Elev_Ft"],
+                        "elev_a": row["Elev_Ft"],                    
+                        "elev_b": None,             
+                        "elev_diff": None,            
                         "Lat": row["Lat"], "Lon": row["Lon"],
                         "route_a": route_a, "mp_a": row["Milepost"],
                         "route_b": route_b, "mp_b": None,
@@ -730,20 +737,20 @@ def generate_html_map(df_h, df_v, df_vtx, out_html, params):
                     <div style='min-width: 220px;'>
                         <b>{row['Topology_Node']} Node</b><br>
                         <hr style='margin: 3px 0;'>
-                        <b>Route A:</b> {row['route_a']} (MP {row['mp_a']:.3f})<br>
-                        <b>Route B:</b> {row['route_b']} (MP {row['mp_b']:.3f})<br>
-                        <b>Elevation:</b> {row['Elev_Ft']:.1f} ft
+                        <b>Route A:</b> {row['route_a']} (MP {row['mp_a']:.3f}) — {row['elev_a']:.1f} ft<br>
+                        <b>Route B:</b> {row['route_b']} (MP {row['mp_b']:.3f}) — {row['elev_b']:.1f} ft<br>
+                        <b>Elevation Difference:</b> {row['elev_diff']:.1f} ft
                     </div>
                     """
                     tooltip = f"{row['Topology_Node']}: {row['route_a']} x {row['route_b']}"
                 else:
                     popup_html = f"""
-                    <div style='min-width: 200px;'>
+                    <div style='min-width: 220px;'>
                         <b>{row['Topology_Node']} Node</b><br>
                         <hr style='margin: 3px 0;'>
                         <b>Route:</b> {row['route_a']}<br>
                         <b>Intersecting Route:</b> {row['route_b']}<br>
-                        <b>Elevation:</b> {row['Elev_Ft']:.1f} ft<br>
+                        <b>Elevation:</b> {row['elev_a']:.1f} ft<br>
                         <b>Milepost:</b> {row['mp_a']:.3f}
                     </div>
                     """
@@ -1522,6 +1529,7 @@ def run_state_alignment(state_fips: str, out_dir: str, dem_dir: str, user_params
 
         topology = np.full(len(df_vtx), np.nan, dtype=object)
         intersecting = np.full(len(df_vtx), np.nan, dtype=object)
+        elev_diff = np.full(len(df_vtx), np.nan, dtype=float)
 
         interchange_count = 0
         at_grade_count = 0
@@ -1559,9 +1567,12 @@ def run_state_alignment(state_fips: str, out_dir: str, dem_dir: str, user_params
                     topology[j] = topo_type
                     intersecting[i] = r2
                     intersecting[j] = r1
+                    elev_diff[i] = dz
+                    elev_diff[j] = dz 
                 
         df_vtx["Topology_Node"] = topology
         df_vtx["Intersecting_Route"] = intersecting
+        df_vtx["Elev_Diff_Ft"] = elev_diff
         logging.info(f"[{state_fips}] Topology mapped: {interchange_count} grade-separated nodes, {at_grade_count} at-grade nodes.")
 
     # Save calculated relational metrics back down to CSV tracking frames
