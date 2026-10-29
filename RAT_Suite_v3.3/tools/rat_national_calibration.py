@@ -68,7 +68,7 @@ Usage. Edit the CONFIGURATION block, then from the RAT Suite root:
     python tools/rat_national_calibration.py
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-CREATED ON: 10/14/2026
+VERSION: 3.3, October 29, 2026
 """
 
 import os

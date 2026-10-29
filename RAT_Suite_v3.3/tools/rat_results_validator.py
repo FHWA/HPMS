@@ -36,7 +36,7 @@ Run by the Unified GUI after an alignment run, or from the command line with
 the file arguments below. Writes qa_validation_report.txt beside the files.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-CREATED ON: 5/14/2026
+VERSION: 3.3, October 29, 2026
 """
 import os
 import re

@@ -62,6 +62,9 @@ reports curve data, before all states are pulled.
 OUTPUT:
   core/national_curve_class_proportions.json (read by the calibration script)
   OUTPUT_DIR/panel_level_raw.csv             (one row per panel, all states)
+
+CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
+VERSION: 3.3, October 29, 2026
 """
 import os
 import sys
