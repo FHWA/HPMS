@@ -1,28 +1,38 @@
 @echo off
-REM Download National Bridge Inventory from FHWA
+REM Downloads the National Bridge Inventory (NBI) and National Tunnel
+REM Inventory (NTI) from FHWA into the folder this file is in. The RAT
+REM Suite reads every .txt, .csv and .xml file in its NBI folder, so keep
+REM only one year's files here.
+
+REM ======================================================================
+REM CONFIGURATION
+REM ======================================================================
+REM Year of the FHWA release to download.
+set YEAR=2025
+REM ======================================================================
+
+set DEST=%~dp0
 
 echo.
 echo ======================================================================
-echo Downloading National Bridge Inventory (NBI) and 
-echo National Tunnel Inventory from FHWA...
-echo This will take a few minutes (the NBI file is ~150 MB)
+echo Downloading the %YEAR% National Bridge Inventory and
+echo National Tunnel Inventory from FHWA to:
+echo %DEST%
+echo The NBI file is about 150 MB and may take a few minutes.
 echo ======================================================================
 echo.
 
-REM Create NBI folder if it doesn't exist
-if not exist "NBI" mkdir NBI
+echo Downloading %YEAR%AllRecordsDelimitedAllStates.txt...
+powershell -Command "(New-Object Net.WebClient).DownloadFile('https://www.fhwa.dot.gov/bridge/nbi/%YEAR%AllRecordsDelimitedAllStates.txt', '%DEST%%YEAR%AllRecordsDelimitedAllStates.txt')"
+if errorlevel 1 echo Download failed. Check the year and your connection.
 
-REM Download current NBI file
-echo Downloading 2025AllRecordsDelimitedAllStates.txt...
-powershell -Command "(New-Object Net.WebClient).DownloadFile('https://www.fhwa.dot.gov/bridge/nbi/2025AllRecordsDelimitedAllStates.txt', 'NBI/2025AllRecordsDelimitedAllStates.txt')"
-
-REM Download NTI file
-echo Downloading 2025NTI.xml...
-powershell -Command "(New-Object Net.WebClient).DownloadFile('https://www.fhwa.dot.gov/bridge/nti/2025NTI.xml', 'NBI/2025NTI.xml')"
+echo Downloading %YEAR%NTI.xml...
+powershell -Command "(New-Object Net.WebClient).DownloadFile('https://www.fhwa.dot.gov/bridge/nti/%YEAR%NTI.xml', '%DEST%%YEAR%NTI.xml')"
+if errorlevel 1 echo Download failed. Check the year and your connection.
 
 echo.
 echo ======================================================================
-echo Download complete! Files saved to NBI/ folder
+echo Done. Remove files from earlier years from this folder.
 echo ======================================================================
 echo.
 pause
