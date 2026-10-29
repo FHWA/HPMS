@@ -1,0 +1,43 @@
+# Saved settings: run_params.json holds the Socrata token and local paths
+run_params.json
+
+# Run outputs and logs. output/ is the GUI's default output folder. The
+# patterns below also catch run files written to any other folder inside
+# the suite folder; *_run_parameters.json records the local DEM folder path.
+output/
+Output_State_*/
+socrata_input_extract.csv
+socrata_input_extract_filters.json
+*_run_parameters.json
+Run_Log_*.txt
+qa_validation_report_*.txt
+*.log
+
+# Elevation tiles (the GUI's default DEM folder is elevation_cache/)
+elevation_cache/
+align_1m_cache/
+*.tif
+
+# NBI/NTI downloads; keep the download script and its instructions
+NBI/*
+!NBI/download_nbi.bat
+!NBI/README.md
+
+# Development and diagnostic scripts and notes that do not ship
+diagnostic/
+claude/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+venv/
+.venv/
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
