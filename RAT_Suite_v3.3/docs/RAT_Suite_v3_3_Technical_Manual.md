@@ -2,7 +2,7 @@
 ## Technical Manual
 
 *Federal Highway Administration, Office of Highway Policy Information*
-*Draft, October 27, 2026*
+*October 29, 2026*
 
 ---
 
