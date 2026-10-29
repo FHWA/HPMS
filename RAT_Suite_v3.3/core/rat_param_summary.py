@@ -32,8 +32,9 @@ only reads CSVs by path.
 
 Both rat_alignment_cli.py and rat_plan_profile_cli.py use these, so every
 output shows the run parameters in the same format.
+
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-CREATED ON: 9/25/2026
+VERSION: 3.3, October 29, 2026
 """
 import datetime
 import html as _html_mod

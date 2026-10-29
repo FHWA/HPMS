@@ -121,6 +121,9 @@ the two roadways at different levels), and the ground along the line does
 not depend on where the stations fall. Where too little ground is left to
 judge (the run lies on or beside a structure), the station test decides
 alone.
+
+CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
+VERSION: 3.3, October 29, 2026
 """
 import math
 import os

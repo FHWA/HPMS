@@ -23,6 +23,9 @@ geospatial processing functions used by all suite modules, including UTM
 coordinate projection, USGS DEM elevation retrieval, UnivariateSpline smoothing,
 calculus-based curvature analysis (kappa), and KDTree spatial indexing for
 4D geometry generation.
+
+CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
+VERSION: 3.3, October 29, 2026
 """
 from typing import Dict, List, Tuple, Optional
 import math

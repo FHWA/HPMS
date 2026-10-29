@@ -28,7 +28,7 @@ serves rat_plan_profile_cli.py, rat_alignment_cli.py (CSV only) and
 tools/rat_structure_span_check.py.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-CREATED ON: 10/14/2026
+VERSION: 3.3, October 29, 2026
 """
 import math
 import logging
