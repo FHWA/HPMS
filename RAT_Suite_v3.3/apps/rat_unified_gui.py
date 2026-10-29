@@ -28,15 +28,16 @@ import os
 import sys
 import json
 import glob
+import re
 import threading
 import logging
+from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 import requests
 import pandas as pd
 import geopandas as gpd
-from shapely.geometry import shape
 import subprocess
 import time
 
@@ -48,10 +49,18 @@ RAT_SUITE_DIR = os.path.dirname(THIS_DIR)
 if RAT_SUITE_DIR not in sys.path:
     sys.path.insert(0, RAT_SUITE_DIR)
 
-from core.rat_core import fetch_socrata_state
+from core.rat_core import fetch_socrata_state, NATIONAL_DEFAULTS, NATIONAL_V_SMOOTH_FACTOR
 
 SOCRATA_DEFAULT = "https://datahub.transportation.gov/resource/42um-tgh5.json"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s: %(message)s")
+
+# Values that were defaults in earlier versions. A saved settings file still
+# holding one of these is offered an update to the current default on load.
+RETIRED_DEFAULTS = {
+    "v_min_grade_change": ["1.5"],
+    "DIP_THRESHOLD_FT":   ["6.5"],
+    "TUNNEL_MAX_LEN_FT":  ["5000"],
+}
 
 HPMS_FIELD_CATALOG = [
     ("stateid",                "State FIPS",                             True),
@@ -315,6 +324,19 @@ class HMPSFieldSelectorDialog:
         self.win.destroy()
 
 
+class ErrorLineCounter(logging.Handler):
+    """Counts the errors logged during a run: records logged at ERROR or
+    above, and lines relayed from the alignment, plan/profile and 4D
+    scripts that carry their own " - ERROR: " tag."""
+    def __init__(self):
+        super().__init__()
+        self.count = 0
+
+    def emit(self, record):
+        if record.levelno >= logging.ERROR or " - ERROR: " in str(record.getMessage()):
+            self.count += 1
+
+
 class TextHandler(logging.Handler):
     def __init__(self, text_widget):
         super().__init__()
@@ -342,6 +364,12 @@ class RATUnifiedGUI:
         self.root.resizable(True, True)
         self.root.configure(bg="#E0E0E0")
 
+        # The processing step running now (a subprocess), so closing the
+        # window can stop it instead of leaving it running unseen.
+        self._active_proc = None
+        self._closing = False
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
         self.vars = {
             "input_url": tk.StringVar(value=SOCRATA_DEFAULT),
             "input_local": tk.StringVar(),
@@ -349,24 +377,26 @@ class RATUnifiedGUI:
             "dem_dir": tk.StringVar(value=os.path.join(os.getcwd(), "elevation_cache")),
             "state_fips": tk.StringVar(),
             "socrata_token": tk.StringVar(),
-            "nbi_url": tk.StringVar(),
-            "nti_url": tk.StringVar(),
             "use_local": tk.BooleanVar(value=False),
             "reuse_socrata_cache": tk.BooleanVar(value=False),
             "simplify_geometry": tk.BooleanVar(value=True),
 
             "densify_spacing_ft": tk.StringVar(value="5"),
-            "h_smooth_factor": tk.StringVar(value="400"),
-            "v_smooth_factor": tk.StringVar(value="1400"),
+            "h_smooth_factor": tk.StringVar(value=str(NATIONAL_DEFAULTS["H"][1])),
+            "v_smooth_factor": tk.StringVar(value=f"{NATIONAL_V_SMOOTH_FACTOR:g}"),
             "h_min_delta": tk.StringVar(value="3.5"),
             "h_min_curve_length_ft": tk.StringVar(value="100"),
             "v_min_curve_length_ft": tk.StringVar(value="200"),
             "v_min_grade_change": tk.StringVar(value="0.5"),
 
             "enable_merge": tk.BooleanVar(value=False),
-            "merge_gap_ft": tk.StringVar(value="600"),
-            "v_merge_gap_ft": tk.StringVar(value="1500"),
+            "merge_gap_floor_ft": tk.StringVar(value="50"),
+            "merge_gap_pct": tk.StringVar(value="0.25"),
             "trim_curve_endpoints": tk.BooleanVar(value=True),
+            # HMM/Viterbi curve classification (on by default); see
+            # H_HMM_STICKINESS / V_HMM_STICKINESS in Advanced Settings.
+            "h_use_hmm_classification": tk.BooleanVar(value=True),
+            "v_use_hmm_classification": tk.BooleanVar(value=True),
 
             "fac_1": tk.BooleanVar(value=True),  
             "fac_2": tk.BooleanVar(value=True),  
@@ -374,6 +404,10 @@ class RATUnifiedGUI:
             "fac_5": tk.BooleanVar(value=False), 
             "fac_6": tk.BooleanVar(value=False), 
             "fac_7": tk.BooleanVar(value=False), 
+            # Records with no facility type / no functional system; processed
+            # as facility type 2 / functional class 7 when checked.
+            "facility_type_include_missing": tk.BooleanVar(value=False),
+            "fsystem_include_missing": tk.BooleanVar(value=False),
 
             "auto_validate": tk.BooleanVar(value=True),
             "open_output_when_done": tk.BooleanVar(value=True),
@@ -387,43 +421,50 @@ class RATUnifiedGUI:
             "do_4d": tk.BooleanVar(value=False),
             "replace_curve_grade": tk.BooleanVar(value=False),
 
-            "out_csv": tk.BooleanVar(value=True),
             "out_geojson": tk.BooleanVar(value=True),
             "out_gpkg": tk.BooleanVar(value=False),
             "out_shp": tk.BooleanVar(value=False),
             "out_html_map": tk.BooleanVar(value=True),
             "out_dashboard": tk.BooleanVar(value=True),
-            "out_qa_exceptions": tk.BooleanVar(value=True),
             "out_pdf": tk.BooleanVar(value=False),
             "out_vtx_spatial": tk.BooleanVar(value=False),
+            "out_structure_report": tk.BooleanVar(value=False),
+            "out_profile_elevs": tk.BooleanVar(value=False),
+            "profile_elev_interval_ft": tk.StringVar(value="100"),
         }
 
         self.fsys_vars = {i: tk.BooleanVar(value=True if i < 7 else False) for i in range(1, 8)}
 
+        # True while saved settings are being restored, so the restored
+        # smoothing factors are not replaced as the State FIPS is set.
+        self._restoring_params = False
+        self._fips_after_id = None
+
         self.advanced_defaults = {
-            "H_BASE_SMOOTH_WINDOW": tk.StringVar(value="21"),
-            "H_MIN_HEAD_CHANGE": tk.StringVar(value="0.003"),
             "H_MAX_RADIUS_FT": tk.StringVar(value="165000"),
             "V_VC_THRESHOLD": tk.StringVar(value="0.002"),
             "V_GAP_TOLERANCE": tk.StringVar(value="5"),
             "V_MIN_OFFSET_FT": tk.StringVar(value="0.10"),
-            "V_REVERSAL_TOLERANCE": tk.StringVar(value="0.02"),
             "REGRESSION_WINDOW_FT": tk.StringVar(value="500"),
-            "TREND_WINDOW_FT": tk.StringVar(value="1000"),
-            "DIP_THRESHOLD_FT": tk.StringVar(value="6.5"),
+            "DIP_THRESHOLD_FT": tk.StringVar(value="3.0"),
+            "STRUCTURE_EDGE_GRADE_PCT": tk.StringVar(value="10"),
             "BRIDGE_MAX_LEN_FT": tk.StringVar(value="8200"),
-            "H_SMOOTH_FACTOR_FS2": tk.IntVar(value=200),
-            "V_SMOOTH_FACTOR_FS2": tk.IntVar(value=1400),
-            "H_SMOOTH_FACTOR_FS3": tk.IntVar(value=400),
-            "V_SMOOTH_FACTOR_FS3": tk.IntVar(value=1400),
-            "H_SMOOTH_FACTOR_FS4": tk.IntVar(value=400),
-            "V_SMOOTH_FACTOR_FS4": tk.IntVar(value=1400),
-            "H_SMOOTH_FACTOR_FS5": tk.IntVar(value=200),
-            "V_SMOOTH_FACTOR_FS5": tk.IntVar(value=1000),
-            "H_SMOOTH_FACTOR_FS6": tk.IntVar(value=200),
-            "V_SMOOTH_FACTOR_FS6": tk.IntVar(value=1000),
-            "H_SMOOTH_FACTOR_FS7": tk.IntVar(value=400),
-            "V_SMOOTH_FACTOR_FS7": tk.IntVar(value=1000),
+            "TUNNEL_MAX_LEN_FT": tk.StringVar(value="10000"),
+            "STRUCTURE_MATCH_TOL_FT": tk.StringVar(value="300"),
+            "H_SMOOTH_FACTOR_FS2": tk.StringVar(value=str(NATIONAL_DEFAULTS["H"][2])),
+            "H_SMOOTH_FACTOR_FS3": tk.StringVar(value=str(NATIONAL_DEFAULTS["H"][3])),
+            "H_SMOOTH_FACTOR_FS4": tk.StringVar(value=str(NATIONAL_DEFAULTS["H"][4])),
+            "H_SMOOTH_FACTOR_FS5": tk.StringVar(value=str(NATIONAL_DEFAULTS["H"][5])),
+            "H_SMOOTH_FACTOR_FS6": tk.StringVar(value=str(NATIONAL_DEFAULTS["H"][6])),
+            "H_SMOOTH_FACTOR_FS7": tk.StringVar(value=str(NATIONAL_DEFAULTS["H"][7])),
+            "H_HMM_STICKINESS": tk.StringVar(value="1.0"),
+            "V_HMM_STICKINESS": tk.StringVar(value="1.0"),
+
+            # --- Chunk stitching and parallel processing (core.rat_core
+            # DEFAULTS). Used by the alignment and 4D enrichment runs only.
+            "CHUNK_JOIN_TOLERANCE_FT": tk.StringVar(value="100"),
+            "MAX_CHUNK_SPLIT_MILES": tk.StringVar(value="25"),
+            "CHUNK_SPLIT_PADDING_FT": tk.StringVar(value="20000"),
         }
 
         self._build_ui()
@@ -433,13 +474,14 @@ class RATUnifiedGUI:
         self.vars["do_4d"].trace_add("write", self._on_4d_toggle)
         self.vars["do_alignment"].trace_add("write", self._on_mode_toggle)
         self.vars["do_4d"].trace_add("write", self._on_mode_toggle)
+        self.vars["do_plan_profile"].trace_add("write", self._on_mode_toggle)
 
     def _setup_logger(self):
         self.logger = logging.getLogger()
         self.logger.handlers = []
         self.logger.addHandler(TextHandler(self.log_text))
 
-        # Auto-populate token and paths from last used run_params.json on startup
+        # Restore the settings from the last run_params.json, if found
         self._auto_load_last_params()
         self.logger.setLevel(logging.INFO)
 
@@ -499,25 +541,20 @@ class RATUnifiedGUI:
         frame_state.grid(row=3, column=1, sticky="w")
         self.ent_state = ttk.Entry(frame_state, textvariable=self.vars["state_fips"], width=12)
         self.ent_state.pack(side=tk.LEFT)
+        # Entering a state fills in that state's calibrated smoothing
+        # factors (_on_state_fips_change); this button reloads them after
+        # the fields have been edited.
         self.btn_load_factors = ttk.Button(
-            frame_state, 
-            text="Use National Smoothing Factors", 
-            command=self._load_national_factors, 
+            frame_state,
+            text="Reload State Factors",
+            command=self._reload_state_factors,
             state="disabled"
         )
         self.btn_load_factors.pack(side=tk.LEFT, padx=4)
         self.vars["state_fips"].trace_add("write", self._on_state_fips_change)
 
         ttk.Label(lf_input, text="Socrata Token (optional):").grid(row=3, column=2, sticky="e", pady=4)
-
-        ttk.Label(lf_input, text="Socrata Token (optional):").grid(row=3, column=2, sticky="e", pady=4)
         ttk.Entry(lf_input, textvariable=self.vars["socrata_token"], width=35).grid(row=3, column=3, sticky="w")
-
-        ttk.Label(lf_input, text="NBI URL (optional):").grid(row=4, column=0, sticky="e", pady=4)
-        ttk.Entry(lf_input, textvariable=self.vars["nbi_url"], width=35).grid(row=4, column=1, sticky="w")
-
-        ttk.Label(lf_input, text="NTI URL (optional):").grid(row=4, column=2, sticky="e", pady=4)
-        ttk.Entry(lf_input, textvariable=self.vars["nti_url"], width=35).grid(row=4, column=3, sticky="w")
 
         lf_fsys = ttk.LabelFrame(lf_input, text="Functional System Filters", padding=8)
         lf_fsys.grid(row=5, column=0, columnspan=5, sticky="ew", pady=8)
@@ -530,6 +567,9 @@ class RATUnifiedGUI:
             ttk.Checkbutton(lf_fsys, text=fs_labels[i - 1], variable=self.fsys_vars[i]).grid(
                 row=0, column=i - 1, padx=4, sticky="w"
             )
+        ttk.Checkbutton(lf_fsys, text="Missing", variable=self.vars["fsystem_include_missing"]).grid(
+            row=0, column=7, padx=4, sticky="w"
+        )
 
         lf_fac = ttk.LabelFrame(lf_input, text="Facility Type Filters", padding=8)
         lf_fac.grid(row=6, column=0, columnspan=5, sticky="ew", pady=8)
@@ -544,6 +584,9 @@ class RATUnifiedGUI:
             ttk.Checkbutton(lf_fac, text=text, variable=self.vars[var_name]).grid(
                 row=0, column=i, padx=4, sticky="w"
             )
+        ttk.Checkbutton(lf_fac, text="Missing", variable=self.vars["facility_type_include_missing"]).grid(
+            row=0, column=len(fac_checks), padx=4, sticky="w"
+        )
 
         lf_dirs = ttk.LabelFrame(main, text="2) Directories", padding=12)
         lf_dirs.pack(fill=tk.X, pady=6)
@@ -580,15 +623,42 @@ class RATUnifiedGUI:
         )
         self.chk_replace_curves.grid(row=1, column=0, columnspan=5, sticky="w", pady=(6, 0))
 
+        # Route ID: typed, with the loaded routes that match listed below
+        # and narrowing as more is typed (_filter_routes).
         ttk.Label(lf_modes, text="Plan/Profile Route ID:").grid(row=2, column=0, sticky="e", pady=4)
-        self.route_combo = ttk.Combobox(lf_modes, textvariable=self.vars["pp_route_id"], width=30, state="readonly")
-        self.route_combo.grid(row=2, column=1, sticky="w", padx=6)
+        self.ent_route = ttk.Entry(lf_modes, textvariable=self.vars["pp_route_id"], width=32)
+        self.ent_route.grid(row=2, column=1, sticky="w", padx=6)
         ttk.Button(lf_modes, text="Load Routes", command=self._load_routes_thread).grid(row=2, column=2, sticky="w")
+        self.lbl_route_count = ttk.Label(lf_modes, text="", foreground="#555555", font=("Arial", 8, "italic"))
+        self.lbl_route_count.grid(row=2, column=3, columnspan=2, sticky="w", padx=8)
 
-        ttk.Label(lf_modes, text="Begin RP (mi):").grid(row=3, column=0, sticky="e", pady=4)
-        ttk.Entry(lf_modes, textvariable=self.vars["pp_start_rp"], width=12).grid(row=3, column=1, sticky="w")
-        ttk.Label(lf_modes, text="End RP (mi):").grid(row=3, column=2, sticky="e", pady=4)
-        ttk.Entry(lf_modes, textvariable=self.vars["pp_end_rp"], width=12).grid(row=3, column=3, sticky="w")
+        self.frm_route_list = ttk.Frame(lf_modes)
+        self.frm_route_list.grid(row=3, column=1, columnspan=2, sticky="w", padx=6)
+        self.lst_routes = tk.Listbox(self.frm_route_list, height=8, width=34, exportselection=False,
+                                     activestyle="dotbox")
+        route_scroll = ttk.Scrollbar(self.frm_route_list, orient="vertical", command=self.lst_routes.yview)
+        self.lst_routes.configure(yscrollcommand=route_scroll.set)
+        self.lst_routes.pack(side=tk.LEFT)
+        route_scroll.pack(side=tk.LEFT, fill=tk.Y)
+        self.frm_route_list.grid_remove()
+
+        self._all_routes = []
+        self._choosing_route = False
+        self.vars["pp_route_id"].trace_add("write", self._filter_routes)
+        self.ent_route.bind("<FocusIn>", lambda e: self._filter_routes())
+        self.ent_route.bind("<FocusOut>", lambda e: self.root.after(200, self._hide_route_list_if_unfocused))
+        self.ent_route.bind("<Down>", self._route_list_enter)
+        self.ent_route.bind("<Return>", self._route_entry_return)
+        self.ent_route.bind("<Escape>", lambda e: self.frm_route_list.grid_remove())
+        self.lst_routes.bind("<ButtonRelease-1>", self._route_list_choose)
+        self.lst_routes.bind("<Return>", self._route_list_choose)
+        self.lst_routes.bind("<Escape>", lambda e: (self.frm_route_list.grid_remove(), self.ent_route.focus_set()))
+        self.lst_routes.bind("<FocusOut>", lambda e: self.root.after(200, self._hide_route_list_if_unfocused))
+
+        ttk.Label(lf_modes, text="Begin RP (mi):").grid(row=4, column=0, sticky="e", pady=4)
+        ttk.Entry(lf_modes, textvariable=self.vars["pp_start_rp"], width=12).grid(row=4, column=1, sticky="w")
+        ttk.Label(lf_modes, text="End RP (mi):").grid(row=4, column=2, sticky="e", pady=4)
+        ttk.Entry(lf_modes, textvariable=self.vars["pp_end_rp"], width=12).grid(row=4, column=3, sticky="w")
 
         lf_param_workspace = ttk.LabelFrame(main, text="4) Parameters", padding=12)
         lf_param_workspace.pack(fill=tk.X, pady=6)
@@ -604,7 +674,7 @@ class RATUnifiedGUI:
         grp_h.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
         ttk.Label(grp_h, text="Densify Spacing (ft):").grid(row=0, column=0, sticky="e", pady=2)
         ttk.Entry(grp_h, textvariable=self.vars["densify_spacing_ft"], width=12).grid(row=0, column=1, sticky="w")
-        ttk.Label(grp_h, text="H Smooth Factor (FS 1)(ft):").grid(row=1, column=0, sticky="e", pady=2)
+        ttk.Label(grp_h, text="H Smooth Factor (FS 1):").grid(row=1, column=0, sticky="e", pady=2)
         ttk.Entry(grp_h, textvariable=self.vars["h_smooth_factor"], width=12).grid(row=1, column=1, sticky="w")
         ttk.Label(grp_h, text="H Min Delta (deg):").grid(row=2, column=0, sticky="e", pady=2)
         ttk.Entry(grp_h, textvariable=self.vars["h_min_delta"], width=12).grid(row=2, column=1, sticky="w")
@@ -613,7 +683,7 @@ class RATUnifiedGUI:
 
         grp_v = ttk.LabelFrame(left, text="Vertical", padding=10)
         grp_v.grid(row=0, column=1, sticky="nsew", padx=6)
-        ttk.Label(grp_v, text="V Smooth Factor (FS 1)(ft):").grid(row=0, column=0, sticky="e", pady=2)
+        ttk.Label(grp_v, text="V Smooth Factor (all FS):").grid(row=0, column=0, sticky="e", pady=2)
         ttk.Entry(grp_v, textvariable=self.vars["v_smooth_factor"], width=12).grid(row=0, column=1, sticky="w")
         ttk.Label(grp_v, text="V Min Curve Length (ft):").grid(row=1, column=0, sticky="e", pady=2)
         ttk.Entry(grp_v, textvariable=self.vars["v_min_curve_length_ft"], width=12).grid(row=1, column=1, sticky="w")
@@ -623,10 +693,10 @@ class RATUnifiedGUI:
         grp_runtime = ttk.LabelFrame(left, text="Merge & Runtime", padding=10)
         grp_runtime.grid(row=0, column=2, sticky="nsew", padx=(6, 0))
         ttk.Checkbutton(grp_runtime, text="Enable Merging", variable=self.vars["enable_merge"]).grid(row=0, column=0, columnspan=2, sticky="w")
-        ttk.Label(grp_runtime, text="H Merge Gap (ft):").grid(row=1, column=0, sticky="e", pady=2)
-        ttk.Entry(grp_runtime, textvariable=self.vars["merge_gap_ft"], width=12).grid(row=1, column=1, sticky="w")
-        ttk.Label(grp_runtime, text="V Merge Gap (ft):").grid(row=2, column=0, sticky="e", pady=2)
-        ttk.Entry(grp_runtime, textvariable=self.vars["v_merge_gap_ft"], width=12).grid(row=2, column=1, sticky="w")
+        ttk.Label(grp_runtime, text="H Merge Gap Floor (ft):").grid(row=1, column=0, sticky="e", pady=2)
+        ttk.Entry(grp_runtime, textvariable=self.vars["merge_gap_floor_ft"], width=12).grid(row=1, column=1, sticky="w")
+        ttk.Label(grp_runtime, text="H Merge Gap (fraction of curve length):").grid(row=2, column=0, sticky="e", pady=2)
+        ttk.Entry(grp_runtime, textvariable=self.vars["merge_gap_pct"], width=12).grid(row=2, column=1, sticky="w")
         ttk.Checkbutton(grp_runtime, text="Run validation automatically", variable=self.vars["auto_validate"]).grid(row=3, column=0, columnspan=2, sticky="w")
         ttk.Checkbutton(grp_runtime, text="Open output folder when complete", variable=self.vars["open_output_when_done"]).grid(row=4, column=0, columnspan=2, sticky="w")
         ttk.Checkbutton(grp_runtime, text="Trim Curve Endpoints", variable=self.vars["trim_curve_endpoints"]).grid(row=5, column=0, columnspan=2, sticky="w")
@@ -634,15 +704,47 @@ class RATUnifiedGUI:
        
         lf_out = ttk.LabelFrame(main, text="5) Output Formats", padding=10)
         lf_out.pack(fill=tk.X, pady=6)
-        ttk.Checkbutton(lf_out, text="CSV", variable=self.vars["out_csv"]).grid(row=0, column=0, sticky="w", padx=8)
+        # CSV is always produced (no checkbox): the national merge of the
+        # 4D output reads the per-state CSVs.
+        ttk.Label(lf_out, text="CSV (always produced)", foreground="#555555").grid(row=0, column=0, sticky="w", padx=8)
         ttk.Checkbutton(lf_out, text="GeoJSON", variable=self.vars["out_geojson"]).grid(row=0, column=1, sticky="w", padx=8)
         ttk.Checkbutton(lf_out, text="GeoPackage (GPKG)", variable=self.vars["out_gpkg"]).grid(row=0, column=2, sticky="w", padx=8)
-        ttk.Checkbutton(lf_out, text="Shapefile", variable=self.vars["out_shp"]).grid(row=0, column=3, sticky="w", padx=8)
+        # Shapefile output (the Blender export) comes only from 4D
+        # enrichment; enabled and disabled by _on_mode_toggle.
+        self.chk_out_shp = ttk.Checkbutton(
+            lf_out, text="Shapefile", variable=self.vars["out_shp"],
+            state="normal" if self.vars["do_4d"].get() else "disabled",
+        )
+        self.chk_out_shp.grid(row=0, column=3, sticky="w", padx=8)
         ttk.Checkbutton(lf_out, text="Interactive HTML Map", variable=self.vars["out_html_map"]).grid(row=1, column=0, sticky="w", padx=8)
         ttk.Checkbutton(lf_out, text="Summary Dashboard HTML", variable=self.vars["out_dashboard"]).grid(row=1, column=1, sticky="w", padx=8)
-        ttk.Checkbutton(lf_out, text="QA Exceptions CSV", variable=self.vars["out_qa_exceptions"]).grid(row=1, column=2, sticky="w", padx=8)
-        ttk.Checkbutton(lf_out, text="Plan/Profile PDF", variable=self.vars["out_pdf"]).grid(row=1, column=3, sticky="w", padx=8)
+        # Plan/Profile PDF is only produced by the plan/profile pipeline.
+        # Starts disabled since "Run Plan/Profile" defaults off.
+        self.chk_out_pdf = ttk.Checkbutton(
+            lf_out, text="Plan/Profile PDF", variable=self.vars["out_pdf"],
+            state="normal" if self.vars["do_plan_profile"].get() else "disabled",
+        )
+        self.chk_out_pdf.grid(row=1, column=3, sticky="w", padx=8)
         ttk.Checkbutton(lf_out, text="Vertices Spatial File (large)", variable=self.vars["out_vtx_spatial"]).grid(row=2, column=2, sticky="w", padx=8)
+        # Bridge/tunnel span list: CSV for alignment runs, CSV + PDF (with
+        # DEM shaded relief) for plan/profile runs.
+        self.chk_out_structures = ttk.Checkbutton(
+            lf_out, text="Structure Span Report", variable=self.vars["out_structure_report"],
+            state="normal" if (self.vars["do_alignment"].get() or self.vars["do_plan_profile"].get()) else "disabled",
+        )
+        self.chk_out_structures.grid(row=2, column=3, sticky="w", padx=8)
+        # Profile and ground elevations printed under each PDF profile view.
+        frm_elevs = ttk.Frame(lf_out)
+        frm_elevs.grid(row=3, column=3, sticky="w", padx=8)
+        pp_state = "normal" if self.vars["do_plan_profile"].get() else "disabled"
+        self.chk_out_elevs = ttk.Checkbutton(
+            frm_elevs, text="Profile Elevations every", variable=self.vars["out_profile_elevs"], state=pp_state,
+        )
+        self.chk_out_elevs.pack(side=tk.LEFT)
+        self.ent_elev_interval = ttk.Entry(frm_elevs, textvariable=self.vars["profile_elev_interval_ft"],
+                                           width=6, state=pp_state)
+        self.ent_elev_interval.pack(side=tk.LEFT, padx=(2, 2))
+        ttk.Label(frm_elevs, text="ft").pack(side=tk.LEFT)
         ttk.Checkbutton(lf_out, text="Simplify Web Geometry (Uncheck for raw GIS fidelity)", variable=self.vars["simplify_geometry"]).grid(row=2, column=0, columnspan=2, sticky="w", padx=8, pady=(8,0))
 
         btn_frame = ttk.Frame(main)
@@ -687,18 +789,18 @@ class RATUnifiedGUI:
 
     def _apply_params_dict(self, data: dict):
         """
-        Restore GUI state from a loaded params dict. Used by both the
-        silent auto-load-on-startup path and the explicit "Load Config"
-        button, so there is exactly one place that knows how to map every
-        saved field back onto a GUI control.
-
-        Previously these were two separate, drifting implementations:
-        auto-load only restored four hardcoded fields (token, output dir,
-        DEM dir, input URL), and Load Config's more general var_map-based
-        restoration had explicit handling for FSYSTEM_FILTER but never for
-        FACILITY_TYPE_FILTER -- so Facility Type silently failed to
-        restore either way a params file got loaded.
+        Restores the GUI from a loaded params dict. Used both when the GUI
+        opens and by "Load Config", so every saved field is mapped back to
+        its control in one place.
         """
+        self._restoring_params = True
+        try:
+            self._apply_params_values(data)
+        finally:
+            self._restoring_params = False
+        self._toggle_source()
+
+    def _apply_params_values(self, data: dict):
         if data.get("OUTPUT_DIR"):
             self.vars["output_dir"].set(data["OUTPUT_DIR"])
         if data.get("DEM_DIR"):
@@ -739,14 +841,32 @@ class RATUnifiedGUI:
                 except Exception:
                     pass
 
-        self._toggle_source()
+    # Where the GUI notes the location of the last run_params.json saved,
+    # so the settings can be restored wherever the output folder is. Kept
+    # in the user's home folder, outside the suite (and the repository); it
+    # holds only that path, not the settings or the Socrata token.
+    LAST_SETTINGS_POINTER = os.path.join(os.path.expanduser("~"), ".rat_suite", "last_settings.json")
+
+    def _remember_params_path(self, params_path: str):
+        try:
+            os.makedirs(os.path.dirname(self.LAST_SETTINGS_POINTER), exist_ok=True)
+            with open(self.LAST_SETTINGS_POINTER, "w", encoding="utf-8") as f:
+                json.dump({"run_params": os.path.abspath(params_path)}, f, indent=2)
+        except Exception as e:
+            logging.debug(f"Could not record the settings location: {e}")
 
     def _auto_load_last_params(self):
-        """On startup, silently restore the full GUI state from the most
-        recent run_params.json if one exists in the output directory."""
-        # Check common locations for a previous run_params.json
+        """On startup, silently restore the full GUI state from the
+        run_params.json saved by the last run (or Save Config). Falls back
+        to an output folder beside or inside apps/."""
         search_paths = []
-        # Same directory as the GUI script
+        try:
+            with open(self.LAST_SETTINGS_POINTER, "r", encoding="utf-8") as f:
+                last = json.load(f).get("run_params")
+            if last:
+                search_paths.append(last)
+        except Exception:
+            pass
         gui_dir = os.path.dirname(os.path.abspath(__file__))
         search_paths.append(os.path.join(gui_dir, "..", "output", "run_params.json"))
         search_paths.append(os.path.join(gui_dir, "output", "run_params.json"))
@@ -759,9 +879,64 @@ class RATUnifiedGUI:
                         data = json.load(f)
                     self._apply_params_dict(data)
                     logging.info(f"Auto-loaded settings from: {candidate}")
+                    self.root.after(300, lambda c=candidate: self._check_loaded_settings(c))
                     break
                 except Exception:
                     pass  # Silent fail -- not critical
+
+    @staticmethod
+    def _same_value(a, b) -> bool:
+        try:
+            return abs(float(a) - float(b)) < 1e-9
+        except (TypeError, ValueError):
+            return str(a).strip().lower() == str(b).strip().lower()
+
+    def _check_loaded_settings(self, source: str):
+        """
+        After settings are loaded from a file, checks the smoothing factors
+        against the state's calibrated values (_check_state_factors), then
+        lists in the Run Log every other setting that differs from the
+        current default. If any saved value is a
+        default from an earlier version (RETIRED_DEFAULTS), offers to update
+        just those to the current defaults.
+        """
+        current = {}
+        for k, v in self._main_default_values().items():
+            current[k] = (v, self.vars[k])
+        for k, v in self._advanced_default_values().items():
+            if k in self.advanced_defaults:
+                current[k] = (v, self.advanced_defaults[k])
+
+        self._check_state_factors(source)
+
+        differs, retired = [], []
+        for k, (default, var) in current.items():
+            if "smooth_factor" in k.lower():
+                continue
+            saved = var.get()
+            if self._same_value(saved, default):
+                continue
+            differs.append(f"{k}: {saved} (default {default})")
+            if any(self._same_value(saved, old) for old in RETIRED_DEFAULTS.get(k, [])):
+                retired.append((k, saved, default, var))
+
+        if not differs:
+            return
+        logging.warning(f"Settings loaded from {source} that differ from the current defaults:")
+        for line in differs:
+            logging.warning(f"    {line}")
+
+        if retired:
+            listing = "\n".join(f"  {k}: {saved}  ->  {default}" for k, saved, default, _ in retired)
+            if messagebox.askyesno(
+                "Outdated settings",
+                "These saved settings are defaults from an earlier version of the RAT Suite:\n\n"
+                f"{listing}\n\nUpdate them to the current defaults?",
+            ):
+                for k, _, default, var in retired:
+                    var.set(default)
+                logging.info("Updated outdated settings to current defaults: "
+                             + ", ".join(k for k, *_ in retired))
 
     def _toggle_source(self):
         use_local = self.vars["use_local"].get()
@@ -770,42 +945,148 @@ class RATUnifiedGUI:
         self.ent_url.configure(state="disabled" if use_local else "normal")
         self.chk_reuse_cache.configure(state="disabled" if use_local else "normal")
 
-    def _on_state_fips_change(self, *_):
-        fips = self.vars["state_fips"].get().strip()
-        if len(fips) > 0 and fips != "00" and fips.upper() != "ALL":
-            self.btn_load_factors.configure(state="normal")
-        else:
-            self.btn_load_factors.configure(state="disabled")
+    # ------------------------------------------------------------------
+    # Smoothing factors
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _is_state_fips(fips: str) -> bool:
+        return fips.isdigit() and fips.zfill(2) != "00"
 
-    def _load_national_factors(self):
-        fips = self.vars["state_fips"].get().strip().zfill(2)
+    def _on_state_fips_change(self, *_):
+        """
+        Enables Reload State Factors for a single state and, unless saved
+        settings are being restored, fills in the factors for the State FIPS
+        entered. Filling waits until typing pauses, so "1" on the way to
+        "10" doesn't load Alabama.
+        """
+        fips = self.vars["state_fips"].get().strip()
+        self.btn_load_factors.configure(state="normal" if self._is_state_fips(fips) else "disabled")
+        if self._restoring_params:
+            return
+        if self._fips_after_id is not None:
+            self.root.after_cancel(self._fips_after_id)
+        self._fips_after_id = self.root.after(600, self._fill_factors_for_entry)
+
+    def _fill_factors_for_entry(self):
+        self._fips_after_id = None
+        fips = self.vars["state_fips"].get().strip()
+        if self._is_state_fips(fips):
+            self._fill_state_factors(fips.zfill(2), announce=False)
+        elif not fips or fips == "00" or fips.upper() == "ALL":
+            # National run: each state's own factors are applied as it is
+            # processed. The fields hold the national values, which are used
+            # for any state without calibrated factors.
+            self._set_factor_fields(self._national_factor_values())
+
+    def _reload_state_factors(self):
+        fips = self.vars["state_fips"].get().strip()
+        if self._is_state_fips(fips):
+            self._fill_state_factors(fips.zfill(2), announce=True)
+
+    @staticmethod
+    def _national_factor_values() -> dict:
+        values = {"H_SMOOTH_FACTOR": NATIONAL_DEFAULTS["H"][1]}
+        for fs in range(2, 8):
+            values[f"H_SMOOTH_FACTOR_FS{fs}"] = NATIONAL_DEFAULTS["H"][fs]
+        return values
+
+    @staticmethod
+    def _read_factor_file() -> dict:
         suite_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         json_path = os.path.join(suite_root, "core", "national_smoothing_factors.json")
-        if os.path.exists(json_path):
-            try:
-                with open(json_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if fips in data:
-                    factors = data[fips]
-                    # Update main variables
-                    if "H_SMOOTH_FACTOR" in factors and factors["H_SMOOTH_FACTOR"] is not None:
-                        self.vars["h_smooth_factor"].set(str(factors["H_SMOOTH_FACTOR"]))
-                    if "V_SMOOTH_FACTOR" in factors and factors["V_SMOOTH_FACTOR"] is not None:
-                        self.vars["v_smooth_factor"].set(str(factors["V_SMOOTH_FACTOR"]))
-                    
-                    # Update advanced variables (FS2-FS7 overrides)
-                    for k, v in factors.items():
-                        if k in self.advanced_defaults and v is not None:
-                            self.advanced_defaults[k].set(str(v))
-                            
-                    messagebox.showinfo("Loaded", f"Successfully loaded national smoothing factors for State {fips}.")
-                else:
-                    messagebox.showwarning("Not Found", f"No factors found for State FIPS {fips} in configuration file.")
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to load smoothing factors: {e}")
+        with open(json_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def _state_factor_values(self, fips: str):
+        """
+        (values, calibrated_keys) for a state: its calibrated horizontal
+        factors, with the national value for any functional system it has
+        none for -- the same values core.rat_core.build_params() applies.
+        Raises OSError/ValueError if the factor file can't be read.
+        """
+        values = self._national_factor_values()
+        calibrated = []
+        state = self._read_factor_file().get(fips) or {}
+        for k in values:
+            if state.get(k) is not None:
+                values[k] = state[k]
+                calibrated.append(k)
+        return values, calibrated
+
+    def _set_factor_fields(self, values: dict):
+        for k, v in values.items():
+            if k == "H_SMOOTH_FACTOR":
+                self.vars["h_smooth_factor"].set(str(v))
+            elif k in self.advanced_defaults:
+                self.advanced_defaults[k].set(str(v))
+
+    def _current_factor_fields(self) -> dict:
+        current = {"H_SMOOTH_FACTOR": self.vars["h_smooth_factor"].get()}
+        for fs in range(2, 8):
+            k = f"H_SMOOTH_FACTOR_FS{fs}"
+            current[k] = self.advanced_defaults[k].get()
+        return current
+
+    def _fill_state_factors(self, fips: str, announce: bool):
+        """Fills the smoothing-factor fields with the state's values and
+        notes in the Run Log which are calibrated and which national."""
+        try:
+            values, calibrated = self._state_factor_values(fips)
+        except Exception as e:
+            logging.error(f"Could not read core/national_smoothing_factors.json: {e}")
+            if announce:
+                messagebox.showerror("Smoothing Factors", f"Could not read the smoothing factors file:\n{e}")
+            return
+        self._set_factor_fields(values)
+
+        if not calibrated:
+            msg = (f"State {fips} has no calibrated smoothing factors; "
+                   "the national values are filled in.")
+            logging.warning(msg)
         else:
-            messagebox.showerror("File Not Found", "national_smoothing_factors.json not found in the core directory.")
-    
+            national = [k for k in values if k not in calibrated]
+            msg = f"Filled in State {fips}'s calibrated horizontal smoothing factors."
+            if national:
+                msg += " National values used for: " + ", ".join(
+                    "FS 1" if k == "H_SMOOTH_FACTOR" else "FS " + k.rsplit("FS", 1)[1]
+                    for k in national) + "."
+            logging.info(msg)
+        if announce:
+            messagebox.showinfo("Smoothing Factors", msg)
+
+    def _check_state_factors(self, source: str):
+        """
+        After saved settings are restored for a single state, offers to
+        replace saved smoothing factors that differ from the state's
+        calibrated values (for example, settings saved before factors were
+        filled in automatically, or from an older calibration).
+        """
+        fips = self.vars["state_fips"].get().strip()
+        if not self._is_state_fips(fips):
+            return
+        fips = fips.zfill(2)
+        try:
+            values, _ = self._state_factor_values(fips)
+        except Exception:
+            return
+        current = self._current_factor_fields()
+        differs = [k for k, v in values.items() if not self._same_value(current.get(k), v)]
+        if not differs:
+            return
+        listing = "\n".join(f"  {k}: {current.get(k)}  ->  {values[k]}" for k in differs)
+        logging.warning(f"Smoothing factors loaded from {source} differ from State {fips}'s:")
+        for k in differs:
+            logging.warning(f"    {k}: {current.get(k)} (State {fips}: {values[k]})")
+        if messagebox.askyesno(
+            "Smoothing Factors",
+            f"These saved smoothing factors differ from State {fips}'s calibrated values:\n\n"
+            f"{listing}\n\nUse State {fips}'s values?",
+        ):
+            self._set_factor_fields(values)
+            logging.info(f"Using State {fips}'s smoothing factors.")
+        else:
+            logging.info("Keeping the saved smoothing factors.")
+
     def _on_4d_toggle(self, *_):
         if self.vars["do_4d"].get():
             self.btn_4d_fields.configure(state="normal")
@@ -818,6 +1099,44 @@ class RATUnifiedGUI:
         self.chk_replace_curves.configure(state="normal" if both else "disabled")
         if not both:
             self.vars["replace_curve_grade"].set(False)
+
+        # Plan/Profile PDF only exists when the plan/profile pipeline runs.
+        if self.vars["do_plan_profile"].get():
+            self.chk_out_pdf.configure(state="normal")
+        else:
+            self.chk_out_pdf.configure(state="disabled")
+            self.vars["out_pdf"].set(False)
+        pp_state = "normal" if self.vars["do_plan_profile"].get() else "disabled"
+        self.chk_out_elevs.configure(state=pp_state)
+        self.ent_elev_interval.configure(state=pp_state)
+        if pp_state == "disabled":
+            self.vars["out_profile_elevs"].set(False)
+
+        # Structure span report comes from alignment and plan/profile runs.
+        if self.vars["do_alignment"].get() or self.vars["do_plan_profile"].get():
+            self.chk_out_structures.configure(state="normal")
+        else:
+            self.chk_out_structures.configure(state="disabled")
+            self.vars["out_structure_report"].set(False)
+
+        # Shapefile (Blender export) is only produced by 4D enrichment.
+        if self.vars["do_4d"].get():
+            self.chk_out_shp.configure(state="normal")
+        else:
+            self.chk_out_shp.configure(state="disabled")
+            self.vars["out_shp"].set(False)
+
+        # The chunking/parallel-engine group only matters when the
+        # alignment or 4D enrichment pipeline is actually running. It only
+        # exists while the Advanced Settings window is open, so guard
+        # against it not being open (or having been closed) right now.
+        chunk_relevant = self.vars["do_alignment"].get() or self.vars["do_4d"].get()
+        widgets = getattr(self, "_adv_chunk_widgets", [])
+        for w in widgets:
+            try:
+                w.configure(state="normal" if chunk_relevant else "disabled")
+            except tk.TclError:
+                pass  # window/widget already closed
 
     def _open_4d_field_selector(self):
         dlg = HMPSFieldSelectorDialog(self.root, self.selected_4d_fields)
@@ -898,16 +1217,17 @@ class RATUnifiedGUI:
         scrollbar.pack(side="right", fill="y")
 
         adv_h_keys = [
-            "H_BASE_SMOOTH_WINDOW", "H_MIN_HEAD_CHANGE", "H_MAX_RADIUS_FT",
+            "H_MAX_RADIUS_FT",
             "H_SMOOTH_FACTOR_FS2", "H_SMOOTH_FACTOR_FS3", "H_SMOOTH_FACTOR_FS4", 
-            "H_SMOOTH_FACTOR_FS5", "H_SMOOTH_FACTOR_FS6", "H_SMOOTH_FACTOR_FS7"
+            "H_SMOOTH_FACTOR_FS5", "H_SMOOTH_FACTOR_FS6", "H_SMOOTH_FACTOR_FS7",
+            "H_HMM_STICKINESS"
         ]
         
         adv_v_keys = [
-            "V_VC_THRESHOLD", "V_GAP_TOLERANCE", "V_MIN_OFFSET_FT", "V_REVERSAL_TOLERANCE",
-            "REGRESSION_WINDOW_FT", "TREND_WINDOW_FT", "DIP_THRESHOLD_FT", "BRIDGE_MAX_LEN_FT",
-            "V_SMOOTH_FACTOR_FS2", "V_SMOOTH_FACTOR_FS3", "V_SMOOTH_FACTOR_FS4", 
-            "V_SMOOTH_FACTOR_FS5", "V_SMOOTH_FACTOR_FS6", "V_SMOOTH_FACTOR_FS7"
+            "V_VC_THRESHOLD", "V_GAP_TOLERANCE", "V_MIN_OFFSET_FT",
+            "REGRESSION_WINDOW_FT", "DIP_THRESHOLD_FT", "STRUCTURE_EDGE_GRADE_PCT",
+            "BRIDGE_MAX_LEN_FT", "TUNNEL_MAX_LEN_FT", "STRUCTURE_MATCH_TOL_FT",
+            "V_HMM_STICKINESS"
         ]
 
         grp_h = ttk.LabelFrame(form, text="Advanced Horizontal", padding=10)
@@ -915,13 +1235,58 @@ class RATUnifiedGUI:
         grp_v = ttk.LabelFrame(form, text="Advanced Vertical / Analysis", padding=10)
         grp_v.grid(row=0, column=1, sticky="nsew", padx=(8, 0), pady=(0, 8))
 
+        adv_chunk_keys = [
+            "CHUNK_JOIN_TOLERANCE_FT", "MAX_CHUNK_SPLIT_MILES", "CHUNK_SPLIT_PADDING_FT",
+        ]
+        grp_chunk = ttk.LabelFrame(form, text="Advanced Chunking / Parallel Engine", padding=10)
+        grp_chunk.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=0, pady=(0, 8))
+        chunk_relevant = self.vars["do_alignment"].get() or self.vars["do_4d"].get()
+        chunk_state = "normal" if chunk_relevant else "disabled"
+        chunk_label = ttk.Label(
+            grp_chunk,
+            text=(
+                "Controls how routes are split into continuity chunks and parallel work "
+                "items for the alignment and 4D enrichment pipelines. CHUNK_JOIN_TOLERANCE_FT "
+                "is how far apart two segment endpoints can be and still count as physically "
+                "continuous (raise this if genuine intersections/interchanges are showing up "
+                "as false chunk breaks). MAX_CHUNK_SPLIT_MILES caps how long a single parallel "
+                "work item can be before a long chunk (e.g. a multi-hundred-mile Interstate) "
+                "gets split for parallelism. CHUNK_SPLIT_PADDING_FT is how much extra geometry "
+                "each split piece reads beyond its boundary for smoothing context -- should "
+                "stay comfortably above your longest observed curve length; a warning is "
+                "logged if a curve gets within 90% of this value."
+                + ("" if chunk_relevant else "\n\n(Grayed out: only used when \"Run Alignment\" "
+                   "or \"Run 4D Enrichment\" is checked.)")
+            ),
+            wraplength=560, justify="left", foreground="#555555",
+        )
+        chunk_label.grid(row=0, column=0, columnspan=2, sticky="w", padx=6, pady=(0, 8))
+        self._adv_chunk_widgets = []
+        for r, k in enumerate(adv_chunk_keys, start=1):
+            ttk.Label(grp_chunk, text=k).grid(row=r, column=0, sticky="e", padx=6, pady=3)
+            entry = ttk.Entry(grp_chunk, textvariable=self.advanced_defaults[k], width=16, state=chunk_state)
+            entry.grid(row=r, column=1, sticky="w", padx=6, pady=3)
+            self._adv_chunk_widgets.append(entry)
+
         for r, k in enumerate(adv_h_keys):
             ttk.Label(grp_h, text=k).grid(row=r, column=0, sticky="e", padx=6, pady=3)
             ttk.Entry(grp_h, textvariable=self.advanced_defaults[k], width=16).grid(row=r, column=1, sticky="w", padx=6, pady=3)
+        # The HMM switch is a checkbox, not an entry, so it is saved as a
+        # true/false value rather than the text "False".
+        r_h_toggle = len(adv_h_keys)
+        ttk.Checkbutton(
+            grp_h, text="Use HMM/Viterbi classification (H)",
+            variable=self.vars["h_use_hmm_classification"]
+        ).grid(row=r_h_toggle, column=0, columnspan=2, sticky="w", padx=6, pady=(8, 3))
 
         for r, k in enumerate(adv_v_keys):
             ttk.Label(grp_v, text=k).grid(row=r, column=0, sticky="e", padx=6, pady=3)
             ttk.Entry(grp_v, textvariable=self.advanced_defaults[k], width=16).grid(row=r, column=1, sticky="w", padx=6, pady=3)
+        r_v_toggle = len(adv_v_keys)
+        ttk.Checkbutton(
+            grp_v, text="Use HMM/Viterbi classification (V)",
+            variable=self.vars["v_use_hmm_classification"]
+        ).grid(row=r_v_toggle, column=0, columnspan=2, sticky="w", padx=6, pady=(8, 3))
 
         btns = ttk.Frame(outer)
         btns.pack(fill=tk.X, pady=(10, 0))
@@ -945,25 +1310,27 @@ class RATUnifiedGUI:
 
         data = {
             "DENSIFY_SPACING_FT": safe_float(self.vars["densify_spacing_ft"].get()),
-            "H_SMOOTH_FACTOR": int(safe_float(self.vars["h_smooth_factor"].get())),
-            "V_SMOOTH_FACTOR": int(safe_float(self.vars["v_smooth_factor"].get())),
+            "H_SMOOTH_FACTOR": safe_float(self.vars["h_smooth_factor"].get()),
+            "V_SMOOTH_FACTOR": safe_float(self.vars["v_smooth_factor"].get()),
             "H_MIN_DELTA": safe_float(self.vars["h_min_delta"].get()),
             "H_MIN_CURVE_LENGTH_FT": safe_float(self.vars["h_min_curve_length_ft"].get()),
             "V_MIN_CURVE_LENGTH_FT": safe_float(self.vars["v_min_curve_length_ft"].get()),
             "V_MIN_GRADE_CHANGE": safe_float(self.vars["v_min_grade_change"].get()),
 
             "ENABLE_MERGE": bool(self.vars["enable_merge"].get()),
-            "MERGE_GAP_FT": safe_float(self.vars["merge_gap_ft"].get()),
-            "V_MERGE_GAP_FT": safe_float(self.vars["v_merge_gap_ft"].get()),
+            "MERGE_GAP_FLOOR_FT": safe_float(self.vars["merge_gap_floor_ft"].get()),
+            "MERGE_GAP_PCT": safe_float(self.vars["merge_gap_pct"].get()),
             "TRIM_CURVE_ENDPOINTS": bool(self.vars["trim_curve_endpoints"].get()),
+            "H_USE_HMM_CLASSIFICATION": bool(self.vars["h_use_hmm_classification"].get()),
+            "V_USE_HMM_CLASSIFICATION": bool(self.vars["v_use_hmm_classification"].get()),
 
             "FSYSTEM_FILTER": fsys,
             "FACILITY_TYPE_FILTER": allowed_facs,
+            "FSYSTEM_INCLUDE_MISSING": bool(self.vars["fsystem_include_missing"].get()),
+            "FACILITY_TYPE_INCLUDE_MISSING": bool(self.vars["facility_type_include_missing"].get()),
             "STATE_FIPS": state_fips_input,
             "SOCRATA_TOKEN": self.vars["socrata_token"].get().strip(),
             "INPUT_URL": self.vars["input_url"].get().strip(),
-            "NBI_URL": self.vars["nbi_url"].get().strip(),
-            "NTI_URL": self.vars["nti_url"].get().strip(),
 
             "DO_ALIGNMENT": bool(self.vars["do_alignment"].get()),
             "DO_PLAN_PROFILE": bool(self.vars["do_plan_profile"].get()),
@@ -972,15 +1339,18 @@ class RATUnifiedGUI:
             "OUTPUT_DIR": out_dir,
             "DEM_DIR": self.vars["dem_dir"].get().strip(),
 
-            "OUT_CSV": bool(self.vars["out_csv"].get()),
+            # CSV is always produced (see the Output Formats note).
+            "OUT_CSV": True,
             "OUT_GEOJSON": bool(self.vars["out_geojson"].get()),
             "OUT_GPKG": bool(self.vars["out_gpkg"].get()),
             "OUT_SHP": bool(self.vars["out_shp"].get()),
             "OUT_HTML_MAP": bool(self.vars["out_html_map"].get()),
             "OUT_DASHBOARD": bool(self.vars["out_dashboard"].get()),
-            "OUT_QA_EXCEPTIONS": bool(self.vars["out_qa_exceptions"].get()),
             "OUT_PDF": bool(self.vars["out_pdf"].get()),
             "OUT_VTX_SPATIAL": bool(self.vars["out_vtx_spatial"].get()),
+            "OUT_STRUCTURE_REPORT": bool(self.vars["out_structure_report"].get()),
+            "OUT_PROFILE_ELEVS": bool(self.vars["out_profile_elevs"].get()),
+            "PROFILE_ELEV_INTERVAL_FT": self.vars["profile_elev_interval_ft"].get().strip(),
             "SIMPLIFY_GEOMETRY": bool(self.vars["simplify_geometry"].get()),
             "INCLUDE_HPMS_FIELDS": self.selected_4d_fields,
             "REPLACE_CURVE_GRADE": bool(self.vars["replace_curve_grade"].get()),
@@ -1005,14 +1375,13 @@ class RATUnifiedGUI:
             except Exception:
                 data[k] = val
 
-        suite_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
         is_national_run = (not state_fips_input or state_fips_input == "00" or state_fips_input.upper() == "ALL")
         data["IGNORE_GUI_SMOOTHING_FACTORS"] = is_national_run
 
         params_path = os.path.join(out_dir, "run_params.json")
         with open(params_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
+        self._remember_params_path(params_path)
         return params_path, data
 
     def _save_config(self):
@@ -1039,56 +1408,61 @@ class RATUnifiedGUI:
 
             logging.info(f"Successfully loaded configuration from: {p}")
             messagebox.showinfo("Loaded", "Configuration successfully loaded!")
+            self._check_loaded_settings(p)
 
         except Exception as e:
             logging.error(f"Failed to load config: {e}")
             messagebox.showerror("Load Error", f"Failed to read the configuration file:\n{e}")
 
-    def _restore_main_defaults(self):
-        defaults = {
+    def _main_default_values(self) -> dict:
+        return {
             "densify_spacing_ft":    "5",
-            "h_smooth_factor":       "400",
-            "v_smooth_factor":       "1400",
+            "h_smooth_factor":       str(NATIONAL_DEFAULTS["H"][1]),
+            "v_smooth_factor":       f"{NATIONAL_V_SMOOTH_FACTOR:g}",
             "h_min_delta":           "3.5",
             "h_min_curve_length_ft": "100",
             "v_min_curve_length_ft": "200",
             "v_min_grade_change":    "0.5",
             "enable_merge":          False,
-            "merge_gap_ft":          "600",
-            "v_merge_gap_ft":        "1500",
+            "merge_gap_floor_ft":    "50",
+            "merge_gap_pct":         "0.25",
             "trim_curve_endpoints":  True,
+            "h_use_hmm_classification": True,
+            "v_use_hmm_classification": True,
         }
-        for k, v in defaults.items():
+
+    def _restore_main_defaults(self):
+        for k, v in self._main_default_values().items():
             self.vars[k].set(v)
         logging.info("Main parameters restored to default.")
 
-    def _restore_advanced_defaults(self):
-        adv_defaults = {
-            "H_BASE_SMOOTH_WINDOW":  "21",
-            "H_MIN_HEAD_CHANGE":     "0.003",
+    def _advanced_default_values(self) -> dict:
+        return {
             "H_MAX_RADIUS_FT":       "165000",
             "V_VC_THRESHOLD":        "0.002",
             "V_GAP_TOLERANCE":       "5",
             "V_MIN_OFFSET_FT":       "0.10",
-            "V_REVERSAL_TOLERANCE":  "0.02",
             "REGRESSION_WINDOW_FT":  "500",
-            "TREND_WINDOW_FT":       "1000", 
-            "DIP_THRESHOLD_FT":      "6.5",
+            "DIP_THRESHOLD_FT":      "3.0",
+            "STRUCTURE_EDGE_GRADE_PCT": "10",
             "BRIDGE_MAX_LEN_FT":     "8200",
-            "H_SMOOTH_FACTOR_FS2":   "200",
-            "V_SMOOTH_FACTOR_FS2":   "1400",
-            "H_SMOOTH_FACTOR_FS3":   "400",
-            "V_SMOOTH_FACTOR_FS3":   "1400",
-            "H_SMOOTH_FACTOR_FS4":   "400",
-            "V_SMOOTH_FACTOR_FS4":   "1400",
-            "H_SMOOTH_FACTOR_FS5":   "200",
-            "V_SMOOTH_FACTOR_FS5":   "1000",
-            "H_SMOOTH_FACTOR_FS6":   "200",
-            "V_SMOOTH_FACTOR_FS6":   "1000",
-            "H_SMOOTH_FACTOR_FS7":   "400",
-            "V_SMOOTH_FACTOR_FS7":   "1000",
+            "TUNNEL_MAX_LEN_FT":     "10000",
+            "STRUCTURE_MATCH_TOL_FT": "300",
+            "H_SMOOTH_FACTOR_FS2":   str(NATIONAL_DEFAULTS["H"][2]),
+            "H_SMOOTH_FACTOR_FS3":   str(NATIONAL_DEFAULTS["H"][3]),
+            "H_SMOOTH_FACTOR_FS4":   str(NATIONAL_DEFAULTS["H"][4]),
+            "H_SMOOTH_FACTOR_FS5":   str(NATIONAL_DEFAULTS["H"][5]),
+            "H_SMOOTH_FACTOR_FS6":   str(NATIONAL_DEFAULTS["H"][6]),
+            "H_SMOOTH_FACTOR_FS7":   str(NATIONAL_DEFAULTS["H"][7]),
+            "H_HMM_STICKINESS":      "1.0",
+            "V_HMM_STICKINESS":      "1.0",
+            "CHUNK_JOIN_TOLERANCE_FT": "100",
+            "MAX_CHUNK_SPLIT_MILES":   "25",
+            "CHUNK_SPLIT_PADDING_FT":  "20000",
         }
-        for k, v in adv_defaults.items():
+
+    def _restore_advanced_defaults(self):
+        for k, v in self._advanced_default_values().items():
             if k in self.advanced_defaults:
                 self.advanced_defaults[k].set(v)
         logging.info("Advanced parameters restored to default.")
@@ -1122,12 +1496,10 @@ class RATUnifiedGUI:
                 state = self.vars["state_fips"].get().strip()
                 token = self.vars["socrata_token"].get().strip()
                 headers = {"X-App-Token": token} if token else {}
-                where = f"stateid='{state}'" if state else ""
+                where = f"stateid='{state.zfill(2)}'" if state else ""
                 params = {"$select": "distinct route_id", "$order": "route_id", "$limit": 100000}
                 if where:
                     params["$where"] = where
-               
-                import time
 
                 max_attempts = 6
                 r = None
@@ -1158,24 +1530,160 @@ class RATUnifiedGUI:
                     return
                 routes = sorted([d["route_id"] for d in data if "route_id" in d])
 
-            self.route_combo["values"] = routes
-            if routes:
-                self.route_combo.current(0)
-            logging.info(f"Loaded {len(routes)} routes.")
+            # Widgets are updated on the GUI thread.
+            self.root.after(0, lambda r=routes: self._set_route_list(r))
+            logging.info(f"Loaded {len(routes):,} routes.")
         except Exception as e:
             logging.error(f"Load routes failed: {e}")
+
+    # ------------------------------------------------------------------
+    # Plan/Profile route selector
+    # ------------------------------------------------------------------
+    def _set_route_list(self, routes):
+        self._all_routes = list(routes)
+        self.lbl_route_count.configure(text=f"{len(routes):,} routes loaded" if routes else "No routes found")
+        if self.root.focus_get() is self.ent_route:
+            self._filter_routes()
+
+    def _matching_routes(self, text: str) -> list:
+        """Loaded routes containing text (ignoring case), those starting with
+        it first."""
+        t = text.strip().upper()
+        if not t:
+            return list(self._all_routes)
+        starts = [r for r in self._all_routes if r.upper().startswith(t)]
+        contains = [r for r in self._all_routes if t in r.upper() and not r.upper().startswith(t)]
+        return starts + contains
+
+    def _filter_routes(self, *_):
+        """Lists the loaded routes matching what has been typed, narrowing
+        as more is typed."""
+        if self._choosing_route or not self._all_routes:
+            return
+        text = self.vars["pp_route_id"].get()
+        matches = self._matching_routes(text)
+        self.lst_routes.delete(0, tk.END)
+        for r in matches:
+            self.lst_routes.insert(tk.END, r)
+        n = len(matches)
+        if text.strip():
+            self.lbl_route_count.configure(
+                text=f"{n:,} of {len(self._all_routes):,} routes match" if n else "No loaded route matches")
+        else:
+            self.lbl_route_count.configure(text=f"{len(self._all_routes):,} routes loaded")
+        exact = n == 1 and matches[0].upper() == text.strip().upper()
+        if n and not exact:
+            self.frm_route_list.grid()
+        else:
+            self.frm_route_list.grid_remove()
+
+    def _choose_route(self, route: str):
+        self._choosing_route = True
+        try:
+            self.vars["pp_route_id"].set(route)
+        finally:
+            self._choosing_route = False
+        self.frm_route_list.grid_remove()
+        self.lbl_route_count.configure(text=f"{len(self._all_routes):,} routes loaded")
+        self.ent_route.focus_set()
+        self.ent_route.icursor(tk.END)
+
+    def _route_list_choose(self, *_):
+        sel = self.lst_routes.curselection()
+        if sel:
+            self._choose_route(self.lst_routes.get(sel[0]))
+        return "break"
+
+    def _route_list_enter(self, *_):
+        """Down arrow in the Route ID field moves into the list."""
+        if self.lst_routes.size():
+            self.frm_route_list.grid()
+            self.lst_routes.focus_set()
+            self.lst_routes.selection_clear(0, tk.END)
+            self.lst_routes.selection_set(0)
+            self.lst_routes.activate(0)
+        return "break"
+
+    def _route_entry_return(self, *_):
+        """Enter in the Route ID field takes the first matching route."""
+        if self.frm_route_list.winfo_ismapped() and self.lst_routes.size():
+            self._choose_route(self.lst_routes.get(0))
+        return "break"
+
+    def _hide_route_list_if_unfocused(self):
+        if self.root.focus_get() not in (self.ent_route, self.lst_routes):
+            self.frm_route_list.grid_remove()
+
+    def _launch_step(self, cmd):
+        """
+        Starts one processing step (alignment, plan/profile, 4D) as a
+        subprocess and records it, so closing the window can stop it. On
+        Windows the step's worker processes are its children; elsewhere it
+        gets its own process group so the workers can be stopped with it.
+        """
+        if self._closing:
+            raise SystemExit  # window closing: start nothing more
+        extra = {} if os.name == "nt" else {"start_new_session": True}
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             text=True, bufsize=1, env=os.environ.copy(), **extra)
+        self._active_proc = p
+        return p
+
+    @staticmethod
+    def _stop_process_tree(p):
+        """Ends a step and every process it started (its worker pool)."""
+        if p is None or p.poll() is not None:
+            return
+        try:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)],
+                               capture_output=True, timeout=60)
+            else:
+                import signal
+                os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+        except Exception:
+            pass
+        try:
+            p.kill()
+        except Exception:
+            pass
+
+    def _on_close(self):
+        """
+        Closing the window while a step is running would leave that step
+        running unseen, still writing files (and could overwrite a later
+        run's outputs). Asks first, and stops the step and its workers.
+        """
+        p = self._active_proc
+        if p is not None and p.poll() is None:
+            if not messagebox.askyesno(
+                "Run in progress",
+                "A run is still in progress. Closing the window will stop it, and "
+                "the step that is running will not write its outputs.\n\n"
+                "Stop the run and close?",
+                icon="warning",
+            ):
+                return
+            self._closing = True
+            logging.warning("Run stopped because the window was closed.")
+            self._stop_process_tree(p)
+        self._closing = True
+        self.root.destroy()
 
     def _run_thread(self):
         self.btn_run.configure(state="disabled")
         threading.Thread(target=self._run, daemon=True).start()
 
-    def _run_validator(self, out_dir):
-        # rat_unified_gui.py lives in apps/, but rat_results_validator.py
-        # lives in tools/ alongside the calibration and diagnostics scripts
-        # -- not apps/ alongside the GUI itself. Check tools/ first (the
-        # correct, documented location), then fall back to apps/ and the
-        # suite root in case of an unusual local layout, rather than
-        # failing immediately on the first guess.
+    def _run_validator(self, out_dir, include_4d=True, since=None):
+        """Runs tools/rat_results_validator.py on the newest outputs in
+        out_dir. include_4d=False leaves out the 4D CSV (4D not run, or
+        failed, this time), so an older one is not checked by mistake.
+        With since (a time.time() value), only files written at or after
+        that time are considered, so files left by an earlier run are never
+        checked. Returns (returncode, message), or (None, "") when out_dir
+        holds no files to check."""
+        # rat_results_validator.py is in tools/; apps/ and the suite folder
+        # are also checked.
         script_dir = os.path.dirname(os.path.abspath(__file__))
         suite_root = os.path.dirname(script_dir)
 
@@ -1195,34 +1703,83 @@ class RATUnifiedGUI:
             checked = ", ".join(os.path.join(d, "rat_results_validator.py") for d in candidate_dirs)
             return 1, f"Validator script not found. Checked: {checked}"
 
-        h_files, v_files, e_files, vtx_files, score_files = [], [], [], [], []
-        
+        h_files, v_files, g_files, e_files, vtx_files, score_files = [], [], [], [], [], []
+
         for root_path, _, files in os.walk(out_dir):
             for f in files:
+                path = os.path.join(root_path, f)
+                if since is not None:
+                    try:
+                        if os.path.getmtime(path) < since:
+                            continue
+                    except OSError:
+                        continue
                 if f.startswith("alignment_horizontal_") and f.endswith(".csv"):
-                    h_files.append(os.path.join(root_path, f))
+                    h_files.append(path)
                 elif f.startswith("alignment_vertical_") and f.endswith(".csv"):
-                    v_files.append(os.path.join(root_path, f))
+                    v_files.append(path)
+                elif f.startswith("alignment_grades_") and f.endswith(".csv"):
+                    g_files.append(path)
                 elif f.startswith("hpms_4d_production_") and f.endswith(".csv"):
-                    e_files.append(os.path.join(root_path, f))
+                    if include_4d:
+                        e_files.append(path)
                 elif f.startswith("alignment_vertices_") and f.endswith(".csv"):
-                    vtx_files.append(os.path.join(root_path, f))
+                    vtx_files.append(path)
                 elif f.startswith("alignment_section_scores_") and f.endswith(".csv"):
-                    score_files.append(os.path.join(root_path, f))
+                    score_files.append(path)
+
+        def _latest(files):
+            return max(files, key=os.path.getmtime)
 
         cmd = [sys.executable, validator_script]
-        if h_files: cmd += ["--horizontal_csv", sorted(h_files)[-1]]
-        if v_files: cmd += ["--vertical_csv", sorted(v_files)[-1]]
-        if e_files: cmd += ["--enriched_csv", sorted(e_files)[-1]]
-        if vtx_files: cmd += ["--vertices_csv", sorted(vtx_files)[-1]]
-        if score_files: cmd += ["--scores_csv", sorted(score_files)[-1]]
+        if h_files: cmd += ["--horizontal_csv", _latest(h_files)]
+        if v_files: cmd += ["--vertical_csv", _latest(v_files)]
+        if g_files: cmd += ["--grades_csv", _latest(g_files)]
+        if e_files: cmd += ["--enriched_csv", _latest(e_files)]
+        if vtx_files: cmd += ["--vertices_csv", _latest(vtx_files)]
+        if score_files: cmd += ["--scores_csv", _latest(score_files)]
 
-        if len(cmd) == 2:  
-            return 1, "No alignment or enrichment outputs found for validation."
- 
+        if len(cmd) == 2:
+            return None, ""
+
         p = subprocess.run(cmd, capture_output=True, text=True, env=os.environ.copy())
         msg = (p.stdout or "") + ("\n" + p.stderr if p.stderr else "")
         return p.returncode, msg.strip()
+
+    def _validate_run(self, out_dir, include_4d, since):
+        """
+        Validates every State folder (Output_State_XX) the run wrote to:
+        one folder for a single-State run, each State in turn for a run of
+        all States, and Output_State_LOCAL for a local file with no State
+        FIPS. Only files written since the run started are checked, so a
+        State that failed this time is not passed on the strength of an
+        earlier run's files. Logs each State's report and returns True when
+        every State checked passed.
+        """
+        folders = sorted(
+            d for d in glob.glob(os.path.join(out_dir, "Output_State_*")) if os.path.isdir(d))
+        checked, failed = [], []
+        for folder in folders:
+            label = os.path.basename(folder)[len("Output_State_"):]
+            rc, vmsg = self._run_validator(folder, include_4d=include_4d, since=since)
+            if rc is None:
+                continue
+            checked.append(label)
+            logging.info(f"=== Validation Report: State {label} ===")
+            logging.info(vmsg if vmsg else "No validator output.")
+            if rc != 0:
+                failed.append(label)
+
+        if not checked:
+            logging.error("Validation: no alignment outputs from this run were found to check.")
+            return False
+        if len(checked) > 1:
+            if failed:
+                logging.warning(f"Validation: {len(failed)} of {len(checked)} States FAILED: "
+                                f"{', '.join(failed)}")
+            else:
+                logging.info(f"Validation: all {len(checked)} States passed.")
+        return not failed
 
     def _latest_plan_profile_outputs(self, out_dir, route_id):
         import re
@@ -1237,7 +1794,56 @@ class RATUnifiedGUI:
             return None, None, None
         return vtx[-1], hor[-1], ver[-1]
 
+    def _run_output_dir(self, out_dir: str):
+        """(folder, label) for a run's Run Log: the state's output folder
+        for a single-state run, otherwise the output folder itself."""
+        fips = self.vars["state_fips"].get().strip()
+        if self._is_state_fips(fips):
+            label = fips.zfill(2)
+            return os.path.join(out_dir, f"Output_State_{label}"), label
+        if self.vars["use_local"].get() and fips.upper() not in ("", "00", "ALL"):
+            return out_dir, re.sub(r"[^A-Za-z0-9]+", "_", fips)
+        return out_dir, "ALL"
+
+    def _start_run_log(self, out_dir: str):
+        """
+        Starts saving the Run Log to Run_Log_<state>_<date>_v<n>.txt, so the
+        record of a run survives the GUI being closed or a crash. Everything
+        shown in the Run Log from here on, including the output relayed from
+        the alignment, plan/profile and 4D scripts, is written as it arrives.
+        Returns (file handler, error counter, path).
+        """
+        log_dir, label = self._run_output_dir(out_dir)
+        os.makedirs(log_dir, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d")
+        version = 1
+        while os.path.exists(os.path.join(log_dir, f"Run_Log_{label}_{stamp}_v{version}.txt")):
+            version += 1
+        path = os.path.join(log_dir, f"Run_Log_{label}_{stamp}_v{version}.txt")
+
+        file_handler = logging.FileHandler(path, encoding="utf-8")
+        file_handler.setFormatter(logging.Formatter("%(message)s"))
+        counter = ErrorLineCounter()
+        root_logger = logging.getLogger()
+        root_logger.addHandler(file_handler)
+        root_logger.addHandler(counter)
+        logging.info(f"RAT Suite run started {datetime.now():%Y-%m-%d %H:%M:%S}")
+        logging.info(f"Run Log file: {path}")
+        return file_handler, counter, path
+
+    @staticmethod
+    def _stop_run_log(file_handler, counter):
+        root_logger = logging.getLogger()
+        for h in (file_handler, counter):
+            if h is not None:
+                root_logger.removeHandler(h)
+                h.close()
+
     def _run(self):
+        run_log_handler, error_counter, run_log_path = None, None, None
+        # Files written from here on belong to this run. The small margin
+        # allows for file systems that store times to the nearest 2 seconds.
+        run_started = time.time() - 2.0
         try:
             self._set_status("Starting", "Validating inputs and preparing run...", busy=True)
 
@@ -1249,9 +1855,25 @@ class RATUnifiedGUI:
                 messagebox.showerror("Missing Paths", "Please set Output and DEM directories.")
                 return
 
+            # The Missing boxes add records with a blank value to the selected
+            # classes and types; at least one of each must be selected.
+            if not any(v.get() for v in self.fsys_vars.values()):
+                self._set_status("Error", "No functional system selected.", busy=False)
+                messagebox.showerror("Functional System Filters",
+                                     "Select at least one functional system. The Missing box adds "
+                                     "records with no functional system to the selected ones.")
+                return
+            if not any(self.vars[f"fac_{t}"].get() for t in (1, 2, 4, 5, 6, 7)):
+                self._set_status("Error", "No facility type selected.", busy=False)
+                messagebox.showerror("Facility Type Filters",
+                                     "Select at least one facility type. The Missing box adds "
+                                     "records with no facility type to the selected ones.")
+                return
+
             os.makedirs(out_dir, exist_ok=True)
             os.makedirs(dem_dir, exist_ok=True)
 
+            run_log_handler, error_counter, run_log_path = self._start_run_log(out_dir)
             params_json, run_params = self._collect_params_json(out_dir)
             logging.info(f"Params saved: {params_json}")
 
@@ -1267,6 +1889,7 @@ class RATUnifiedGUI:
 
             use_local = self.vars["use_local"].get()
             input_path = None
+            is_national_run = False
 
             self._set_status("Input", "Preparing source data...", busy=True)
 
@@ -1283,68 +1906,115 @@ class RATUnifiedGUI:
                 logging.info(f"Using local input: {input_path}")
             else:
                 input_path = os.path.join(out_dir, "socrata_input_extract.csv")
-                use_cached = (
-                    self.vars.get("reuse_socrata_cache") is not None
-                    and self.vars["reuse_socrata_cache"].get()
-                    and os.path.exists(input_path)
-                )
+                state = self.vars["state_fips"].get().strip()
+                is_national_run = (not state or state == "00" or state.upper() == "ALL")
 
-                if use_cached:
-                    cache_size_mb = os.path.getsize(input_path) / (1024 ** 2)
-                    self._set_status("Input", "Reusing cached Socrata extract...", busy=True)
-                    logging.info(
-                        f"Reuse Socrata cache enabled -- skipping download. "
-                        f"Using existing extract: {input_path} ({cache_size_mb:,.0f} MB)"
-                    )
+                if is_national_run:
+                    # Nothing is downloaded here. The alignment script is run
+                    # with --state ALL and fetches and processes one state at
+                    # a time; one combined extract would, among other things,
+                    # give a bounding box spanning the globe (Alaska crosses
+                    # the antimeridian).
+                    input_path = None
+                    self._set_status("Input", "Nationwide run -- each state will fetch its own data.", busy=True)
+                    logging.info("Nationwide run selected -- skipping combined Socrata download; "
+                                 "alignment script will fetch and process each state individually.")
                 else:
-                    self._set_status("Input", "Downloading data from Socrata...", busy=True)
-                    logging.info("Downloading Socrata data with selected filters...")
+                    # The filters the extract was downloaded with are saved
+                    # beside it; the cache is reused only when they match.
+                    filters_path = os.path.splitext(input_path)[0] + "_filters.json"
+                    extract_filters = {
+                        "STATE_FIPS": state.zfill(2),
+                        "INPUT_URL": self.vars["input_url"].get().strip() or SOCRATA_DEFAULT,
+                        "FACILITY_TYPE_FILTER": run_params.get("FACILITY_TYPE_FILTER"),
+                        "FSYSTEM_FILTER": run_params.get("FSYSTEM_FILTER"),
+                        "FACILITY_TYPE_INCLUDE_MISSING": bool(run_params.get("FACILITY_TYPE_INCLUDE_MISSING", False)),
+                        "FSYSTEM_INCLUDE_MISSING": bool(run_params.get("FSYSTEM_INCLUDE_MISSING", False)),
+                    }
+                    use_cached = (
+                        self.vars.get("reuse_socrata_cache") is not None
+                        and self.vars["reuse_socrata_cache"].get()
+                        and os.path.exists(input_path)
+                    )
+                    if use_cached:
+                        try:
+                            with open(filters_path, "r", encoding="utf-8") as f:
+                                cached_filters = json.load(f)
+                        except (OSError, ValueError):
+                            cached_filters = None
+                        if cached_filters != extract_filters:
+                            use_cached = False
+                            logging.info("The cached Socrata extract was downloaded with other settings "
+                                         "(State, source, or filters); downloading again.")
 
-                    url = self.vars["input_url"].get().strip() or SOCRATA_DEFAULT
-                    state = self.vars["state_fips"].get().strip()
-                    token = self.vars["socrata_token"].get().strip()
-                    facility_filter = run_params.get("FACILITY_TYPE_FILTER")
-                    fsystem_filter = run_params.get("FSYSTEM_FILTER")
-
-                    def _progress(rows_so_far):
-                        self._set_status("Input", f"Fetching Socrata rows... currently {rows_so_far:,}", busy=True)
-
-                    try:
-                        df = fetch_socrata_state(
-                            state,
-                            token=token,
-                            facility_type_filter=facility_filter,
-                            fsystem_filter=fsystem_filter,
-                            url=url,
-                            progress_callback=_progress,
+                    if use_cached:
+                        cache_size_mb = os.path.getsize(input_path) / (1024 ** 2)
+                        self._set_status("Input", "Reusing cached Socrata extract...", busy=True)
+                        logging.info(
+                            f"Reuse Socrata cache enabled -- skipping download. "
+                            f"Using existing extract: {input_path} ({cache_size_mb:,.0f} MB)"
                         )
-                    except ValueError:
-                        self._set_status("Error", "No records returned from Socrata with current filters.", busy=False)
-                        messagebox.showerror("No Data", "No records returned from Socrata with current filters.")
-                        return
-                    except Exception as ex:
-                        self._set_status("Error", f"Socrata download failed: {ex}", busy=False)
-                        messagebox.showerror("Download Failed", f"Socrata download failed:\n{ex}")
-                        return
+                    else:
+                        self._set_status("Input", "Downloading data from Socrata...", busy=True)
+                        logging.info("Downloading Socrata data with selected filters...")
 
-                    df.to_csv(input_path, index=False)
-                    logging.info(f"Socrata extract saved: {input_path} ({len(df):,} rows)")
-                    self._set_status("Input", f"Socrata extract ready ({len(df):,} rows).", busy=True)
+                        url = self.vars["input_url"].get().strip() or SOCRATA_DEFAULT
+                        token = self.vars["socrata_token"].get().strip()
+                        facility_filter = run_params.get("FACILITY_TYPE_FILTER")
+                        fsystem_filter = run_params.get("FSYSTEM_FILTER")
+
+                        def _progress(rows_so_far):
+                            self._set_status("Input", f"Fetching Socrata rows... currently {rows_so_far:,}", busy=True)
+
+                        try:
+                            df = fetch_socrata_state(
+                                state.zfill(2),
+                                token=token,
+                                facility_type_filter=facility_filter,
+                                fsystem_filter=fsystem_filter,
+                                include_missing_facility=bool(run_params.get("FACILITY_TYPE_INCLUDE_MISSING", False)),
+                                include_missing_fsystem=bool(run_params.get("FSYSTEM_INCLUDE_MISSING", False)),
+                                url=url,
+                                progress_callback=_progress,
+                            )
+                        except ValueError:
+                            self._set_status("Error", "No records returned from Socrata with current filters.", busy=False)
+                            messagebox.showerror("No Data", "No records returned from Socrata with current filters.")
+                            return
+                        except Exception as ex:
+                            self._set_status("Error", f"Socrata download failed: {ex}", busy=False)
+                            messagebox.showerror("Download Failed", f"Socrata download failed:\n{ex}")
+                            return
+
+                        df.to_csv(input_path, index=False)
+                        with open(filters_path, "w", encoding="utf-8") as f:
+                            json.dump(extract_filters, f, indent=2)
+                        logging.info(f"Socrata extract saved: {input_path} ({len(df):,} rows)")
+                        self._set_status("Input", f"Socrata extract ready ({len(df):,} rows).", busy=True)
 
             run_any = False
 
             if self.vars["do_alignment"].get() and os.path.exists(alignment_script):
                 run_any = True
                 self._set_status("Alignment", "Running alignment module...", busy=True)
-                cmd = [
-                    sys.executable, alignment_script,
-                    "--input", input_path,
-                    "--outdir", out_dir,
-                    "--demdir", dem_dir,
-                    "--params_json", params_json
-                ]
+                if is_national_run:
+                    cmd = [
+                        sys.executable, alignment_script,
+                        "--state", "ALL",
+                        "--outdir", out_dir,
+                        "--demdir", dem_dir,
+                        "--params_json", params_json
+                    ]
+                else:
+                    cmd = [
+                        sys.executable, alignment_script,
+                        "--input", input_path,
+                        "--outdir", out_dir,
+                        "--demdir", dem_dir,
+                        "--params_json", params_json
+                    ]
    
-                p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=os.environ.copy())
+                p = self._launch_step(cmd)
 
                 try:
                     for line in iter(p.stdout.readline, ''):
@@ -1359,6 +2029,8 @@ class RATUnifiedGUI:
                     self._set_status("Error", "Alignment timed out.", busy=False)
                     return
                 
+                if self._closing:
+                    return  # stopped by closing the window
                 if p.returncode != 0:
                     self._set_status("Error", f"Alignment failed (exit code {p.returncode}).", busy=False)
                     messagebox.showerror("Run Failed", "Alignment failed. Check the log for details.")
@@ -1370,6 +2042,13 @@ class RATUnifiedGUI:
                 if not route_id:
                     self._set_status("Error", "Plan/Profile route ID is missing.", busy=False)
                     messagebox.showerror("Missing Route", "Select/enter a Route ID for Plan/Profile.")
+                    return
+                if self._all_routes and route_id.upper() not in {r.upper() for r in self._all_routes}:
+                    self._set_status("Error", f"Route {route_id} is not among the loaded routes.", busy=False)
+                    messagebox.showerror(
+                        "Unknown Route",
+                        f"Route ID \"{route_id}\" is not among the {len(self._all_routes):,} routes loaded. "
+                        "Pick one from the list under the Route ID field.")
                     return
 
                 self._set_status("Plan/Profile", f"Running plan/profile for route {route_id}...", busy=True)
@@ -1387,7 +2066,7 @@ class RATUnifiedGUI:
                 if start_val: cmd.extend(["--start", start_val])
                 if end_val: cmd.extend(["--end", end_val])
 
-                p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=os.environ.copy())
+                p = self._launch_step(cmd)
                 
                 try:
                     for line in iter(p.stdout.readline, ''):
@@ -1402,6 +2081,8 @@ class RATUnifiedGUI:
                     self._set_status("Error", "Plan/Profile timed out.", busy=False)
                     return
                 
+                if self._closing:
+                    return  # stopped by closing the window
                 if p.returncode != 0:
                     self._set_status("Error", f"Plan/Profile failed (exit code {p.returncode}).", busy=False)
                     messagebox.showerror("Run Failed", "Plan/Profile failed. Check the log for details.")
@@ -1423,8 +2104,19 @@ class RATUnifiedGUI:
                                 "--horizontal_csv", horizontal_csv,
                                 "--vertical_csv", vertical_csv,
                                 "--pdf_out", pdf_out,
-                                "--route_id", route_id
+                                "--route_id", route_id,
+                                "--dem_dir", dem_dir,
                             ]
+                            if self.vars["out_profile_elevs"].get():
+                                try:
+                                    interval = float(self.vars["profile_elev_interval_ft"].get())
+                                except ValueError:
+                                    interval = 0.0
+                                if interval > 0:
+                                    cmd_pdf += ["--profile_elev_interval_ft", str(interval)]
+                                else:
+                                    logging.warning("Profile elevation interval must be a positive number of feet; "
+                                                    "elevations omitted from the PDF.")
                             p_pdf = subprocess.run(cmd_pdf, capture_output=True, text=True, env=os.environ.copy())
                             
                             if p_pdf.stdout:
@@ -1438,16 +2130,25 @@ class RATUnifiedGUI:
                     else:
                         logging.warning("No PDF report script found.")
 
+            four_d_failed = False
             if self.vars["do_4d"].get() and os.path.exists(enrich_script):
                 run_any = True
                 self._set_status("4D Enrichment", "Running 4D enrichment module...", busy=True)
-                cmd = [
-                    sys.executable, enrich_script,
-                    "--input", input_path,
-                    "--outdir", out_dir,
-                    "--demdir", dem_dir,
-                    "--params_json", params_json
-                ]
+                if is_national_run:
+                    cmd = [
+                        sys.executable, enrich_script,
+                        "--outdir", out_dir,
+                        "--demdir", dem_dir,
+                        "--params_json", params_json
+                    ]
+                else:
+                    cmd = [
+                        sys.executable, enrich_script,
+                        "--input", input_path,
+                        "--outdir", out_dir,
+                        "--demdir", dem_dir,
+                        "--params_json", params_json
+                    ]
                 
                 if self.vars["replace_curve_grade"].get():
                     state_label = self.vars["state_fips"].get().strip().zfill(2)
@@ -1458,25 +2159,26 @@ class RATUnifiedGUI:
                         for r, _, files in os.walk(state_out_dir)
                         for f in files
                         if f.startswith("alignment_horizontal_") and f.endswith(".csv")
-                    ])
-                    v_files = sorted([
+                    ], key=os.path.getmtime)
+                    g_files = sorted([
                         os.path.join(r, f)
                         for r, _, files in os.walk(state_out_dir)
                         for f in files
-                        if f.startswith("alignment_vertical_") and f.endswith(".csv")
-                    ])
+                        if f.startswith("alignment_grades_") and f.endswith(".csv")
+                    ], key=os.path.getmtime)
                     if h_files:
-                        cmd += ["--horizontal-csv", h_files[-1]]
+                        cmd += ["--horizontal_csv", h_files[-1]]
                         logging.info(f"Curve replacement: using {os.path.basename(h_files[-1])}")
                     else:
                         logging.warning("Curve/grade replacement requested but no horizontal CSV found. Skipping.")
-                    if v_files:
-                        cmd += ["--vertical-csv", v_files[-1]]
-                        logging.info(f"Grade replacement: using {os.path.basename(v_files[-1])}")
+                    if g_files:
+                        cmd += ["--grades_csv", g_files[-1]]
+                        logging.info(f"Grade replacement: using {os.path.basename(g_files[-1])}")
                     else:
-                        logging.warning("Curve/grade replacement requested but no vertical CSV found. Skipping.")
+                        logging.warning("Curve/grade replacement requested but no grades CSV found "
+                                        "(rerun Alignment to produce alignment_grades_*.csv). Skipping.")
 
-                p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=os.environ.copy())
+                p = self._launch_step(cmd)
                 
                 try:
                     for line in iter(p.stdout.readline, ''):
@@ -1491,26 +2193,21 @@ class RATUnifiedGUI:
                     self._set_status("Error", "4D Enricher error.", busy=False)
                     return
                 
+                # On a 4D failure the alignment outputs are still validated
+                # below; the failure is reported at the end of the run.
+                if self._closing:
+                    return  # stopped by closing the window
                 if p.returncode != 0:
-                    self._set_status("Error", f"4D Enricher failed (exit code {p.returncode}).", busy=False)
-                    messagebox.showerror("Run Failed", f"4D Enricher failed. Exit code {p.returncode}")
-                    return
+                    four_d_failed = True
+                    logging.error(f"4D Enricher failed (exit code {p.returncode}).")
 
                 # ----------------------------------------------------------
                 # NATIONAL MERGE
-                # When running all states (STATE_FIPS blank / "00"), merge
-                # all per-state production CSVs into a single national file.
-                # Per-state files are retained alongside the national output.
+                # When running all states (State FIPS blank, "00" or ALL),
+                # merge the per-state production CSVs into a single national
+                # file. The per-state files are kept.
                 # ----------------------------------------------------------
-                # state_fips_input was a local variable inside
-                # _collect_params_json(), not this method (_run) -- reading
-                # it here raised NameError after every successful run that
-                # reached this point, which is why "Run Selected" stayed
-                # disabled even though alignment and enrichment had both
-                # already completed. Read the same value directly from the
-                # GUI variable instead.
-                current_state_fips = self.vars["state_fips"].get().strip().zfill(2)
-                if current_state_fips == "00":
+                if is_national_run and not four_d_failed:
                     self._set_status("4D Enrichment", "Merging per-state CSVs into national output...", busy=True)
                     logging.info("\n" + "="*60)
                     logging.info("=== NATIONAL MERGE: Combining per-state 4D CSVs ===")
@@ -1569,20 +2266,31 @@ class RATUnifiedGUI:
             if self.vars["auto_validate"].get() and self.vars["do_alignment"].get():
                 self._set_status("Validation", "Running validator checks...", busy=True)
                 
-                state_label = self.vars["state_fips"].get().strip().zfill(2)
-                state_out_dir = os.path.join(out_dir, f"Output_State_{state_label}") \
-                    if state_label and state_label != "00" else out_dir
-                rc, vmsg = self._run_validator(state_out_dir)
-                logging.info("=== Validation Report ===")
-                logging.info(vmsg if vmsg else "No validator output.")
-                validation_ok = (rc == 0)
+                validation_ok = self._validate_run(
+                    out_dir, include_4d=self.vars["do_4d"].get() and not four_d_failed,
+                    since=run_started)
 
-            if validation_ok:
-                self._set_status("Complete", "Run completed successfully.", busy=False)
-                messagebox.showinfo("Complete", "Run completed successfully.")
-            else:
+            n_errors = error_counter.count if error_counter else 0
+            log_note = f"\n\nRun Log saved to:\n{run_log_path}" if run_log_path else ""
+            if four_d_failed:
+                self._set_status("Error", "4D Enricher failed; alignment outputs were validated.", busy=False)
+                messagebox.showerror(
+                    "Run Failed",
+                    "4D Enricher failed. The alignment outputs were validated; "
+                    f"see the Run Log for details.{log_note}")
+            elif not validation_ok:
                 self._set_status("Complete", "Run completed, but validation reported issues.", busy=False)
-                messagebox.showwarning("Complete with Warnings", "Run completed, but validation reported issues.")
+                messagebox.showwarning("Complete with Warnings",
+                                       f"Run completed, but validation reported issues.{log_note}")
+            elif n_errors:
+                self._set_status("Complete", f"Run completed with {n_errors} error line(s) in the Run Log.", busy=False)
+                messagebox.showwarning(
+                    "Complete with Errors",
+                    f"Run completed, but the Run Log has {n_errors} error line(s). "
+                    f"Search it for \"ERROR\".{log_note}")
+            else:
+                self._set_status("Complete", "Run completed successfully.", busy=False)
+                messagebox.showinfo("Complete", f"Run completed successfully.{log_note}")
 
             if self.vars["open_output_when_done"].get():
                 self._open_output_folder(out_dir)
@@ -1592,6 +2300,9 @@ class RATUnifiedGUI:
             self._set_status("Error", str(e), busy=False)
             messagebox.showerror("Error", str(e))
         finally:
+            if run_log_handler is not None:
+                logging.info(f"Run ended {datetime.now():%Y-%m-%d %H:%M:%S}")
+            self._stop_run_log(run_log_handler, error_counter)
             self.btn_run.configure(state="normal")
             if hasattr(self, "status_phase") and self.status_phase.get() not in ("Complete", "Error"):
                 self._set_status("Idle", "No active tasks.", busy=False)

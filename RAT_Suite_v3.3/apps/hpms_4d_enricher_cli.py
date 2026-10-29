@@ -18,28 +18,20 @@ RAT 4D ENRICHER ENGINE v3.3 (National Batch Processor)
 --------------------------------------------------------------------------------
 ROLE: Upgrades 2D HPMS tables into 3D geometries with linear referencing.
 DESCRIPTION:
-Calculates a smoothed, continuous "macro-profile" for a route, then uses a
-Metric KDTree to snap fragmented HPMS tabular rows back to the smoothed alignment.
-Outputs WKT_ZM strings containing Longitude, Latitude, Elevation (Z), and
-Milepost (M) for advanced 4D digital twin modeling.
+Builds each route's smoothed 3D profile the way rat_alignment_cli.py does
+(continuity chunks, long chunks split into padded pieces processed in
+parallel, 1 m DEM tiles from the shared align_1m_cache), then uses a metric
+KDTree to place every vertex of the route's HPMS records on that profile.
+Each record is placed once, against its whole route. Outputs WKT_ZM strings
+containing Longitude, Latitude, Elevation (Z, meters) and Milepost (M) for
+GIS and 3D applications.
 
-CHANGES:
-  - Raw DEM fallback for segments that could not be enriched via the smoothed
-    macro-profile pipeline. Routes or chunks that fail the UnivariateSpline
-    step (typically because the geometry is too short to satisfy the minimum
-    point requirement) previously produced no output for any HPMS segments
-    on that route. The fallback samples USGS DEM elevation directly at each
-    original vertex coordinate using get_elevations(), bypassing the smoothing
-    and KDTree steps entirely. Milepost values are still interpolated
-    proportionally from Start_MP and End_MP.
-
-    Fallback records are tagged with Elevation_Source = "raw_fallback" in the
-    output; successfully smoothed records carry Elevation_Source = "smoothed".
-    This column allows downstream users to distinguish the two populations.
-
-    The fallback is applied after the main enrichment loop. Only segments with
-    no result from the primary pipeline are candidates; segments that were
-    enriched normally are never overwritten by the fallback.
+Raw DEM fallback. Where a route cannot be smoothed (usually because its
+geometry is too short for the spline), its segments are enriched by
+sampling the cached 1 m DEM directly at each original vertex, with mileposts
+interpolated from Start_MP and End_MP. Only segments with no result from
+the smoothed pipeline are filled this way. The Elevation_Source column
+reads "smoothed" or "raw_fallback" so the two can be told apart.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
 CREATED ON: 5/14/2026
@@ -49,29 +41,15 @@ import sys
 import json
 import logging
 import math
+import warnings
 from datetime import datetime
 import numpy as np
 import pandas as pd
 import geopandas as gpd
-import argparse
 from shapely.wkt import loads
 from shapely.geometry import shape, LineString
-from concurrent.futures import ProcessPoolExecutor, as_completed
-
-# Module-level global for NBI/NTI structures. Set once per worker process via
-# _init_worker_nbi() rather than passed as an argument to every task submission.
-# Re-pickling a 743,677-record GeoDataFrame for each of potentially millions of
-# grid cell tasks causes severe memory pressure and IPC overhead at national scale.
-_WORKER_NBI_NTI_GDF = None
-GLOBAL_PARAMS_JSON = {}
-
-def _init_worker_nbi(nbi_nti_gdf):
-    """
-    ProcessPoolExecutor initializer. Runs once when each worker process starts,
-    setting the module-level NBI/NTI reference for that process only.
-    """
-    global _WORKER_NBI_NTI_GDF
-    _WORKER_NBI_NTI_GDF = nbi_nti_gdf
+from pyproj import Transformer
+from concurrent.futures import ProcessPoolExecutor
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 RAT_SUITE_DIR = os.path.dirname(THIS_DIR)
@@ -80,32 +58,64 @@ if RAT_SUITE_DIR not in sys.path:
 
 from core.rat_core import (
     build_params,
-    stitch_linestrings_ordered,
+    build_route_continuity_chunks,
+    route_spans_several_fsystems,
+    log_fsystem_summary,
+    describe_smoothing_factors,
+    split_chunks_for_parallelism,
+    ensure_dem_cells_cached,
     smooth_plan_profile_from_linestring,
+    profile_result_ok,
     build_metric_kdtree,
     query_metric_kdtree,
-    download_dems,
-    get_elevations,
     fetch_socrata_state,
     load_local_hpms,
     filter_local_df_to_state,
     apply_facility_fsystem_filters,
+    fetch_nbi_nti_state,
+    SOCRATA_DEFAULT,
+    SOCRATA_TOKEN as ENV_SOCRATA_TOKEN,
+    compute_padded_bbox,
+    get_appropriate_utm_zone,
+    init_worker_nbi,
+    run_bounded_parallel,
+    DemCacheUnavailable,
+    dem_cache_reachable,
+    claim_output_version,
     FEET_PER_METER,
-    fetch_nbi_nti_state
+    release_output_version,
+    raise_if_dem_cache_lost,
 )
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s: %(message)s")
 
 
 # ===========================================================================
-# USER CONFIGURATION BLOCK
+# CONFIGURATION
 # ===========================================================================
 
-# Facility type and functional system filters applied at the Socrata query level.
+# List of 2-digit State FIPS codes to process. Use ["ALL"] to process the US.
+# OR, leave empty [] and provide a LOCAL_FILE_PATH below to process a single CSV.
+STATES_TO_PROCESS = ["31"]
+
+LOCAL_FILE_PATH = ""
+OUTPUT_DIR = ""   # Set to your output directory, e.g. r"C:\Output\RAT"
+DEM_DIR    = ""   # Set to your DEM cache directory
+
+SOCRATA_TOKEN = ""                 # blank = the RAT_SOCRATA_TOKEN environment variable
+SOCRATA_URL   = SOCRATA_DEFAULT    # HPMS dataset on the U.S. DOT data portal
+
+# Facility type and functional system filters, applied to the Socrata query
+# or to a local file (the same filters the alignment applies).
 # HPMS facility types: 1 = One-Way Roadway, 2 = Two-Way Roadway, 4 = Ramp,
 # 5 = Non-Mainline, 6 = Non-Inventory Direction, 7 = Planned/Unbuilt.
 # Default includes mainline roadways only (types 1 and 2).
 FACILITY_TYPE_FILTER = [1, 2]
 FSYSTEM_FILTER       = []     # Empty list = all functional systems
+# Records with no facility type / no functional system are processed only
+# when these are True, as facility type 2 / functional class 7. The output
+# keeps them blank, as submitted.
+FACILITY_TYPE_INCLUDE_MISSING = False
+FSYSTEM_INCLUDE_MISSING       = False
 
 # User-selected field subset from GUI (None = full pass-through)
 SELECTED_HPMS_FIELDS = None
@@ -115,11 +125,28 @@ SELECTED_HPMS_FIELDS = None
 # invoked by the GUI.
 INCLUDE_ALL_HPMS_FIELDS = True
 
-# Paths to RAT alignment output CSVs for curve/grade field replacement.
-# When provided, CURVES_A–F and GRADES_A–F are replaced with RAT-derived
-# values. Leave empty to preserve original HPMS-reported values.
+# Paths to RAT alignment outputs for curve/grade field replacement:
+# alignment_horizontal_*.csv for CURVES_A–F and alignment_grades_*.csv for
+# GRADES_A–F. Leave empty to keep the HPMS-reported values.
 HORIZONTAL_CSV = ""
-VERTICAL_CSV   = ""
+GRADES_CSV     = ""
+
+# Spatial outputs besides the CSV (set by the GUI's GeoPackage and
+# Shapefile boxes when run from the GUI): a GeoPackage with 3D geometry, and
+# a shapefile projected to UTM for Blender and other 3D tools.
+OUT_GPKG = True
+OUT_SHP  = True
+
+# Records that get no elevations (no smoothed profile and no DEM values) are
+# left out of the outputs. The count is always logged; above this percent of
+# the state's records it is logged as an ERROR.
+MAX_UNENRICHED_PCT = 5.0
+
+# A record vertex farther than this from every point of its route's smoothed
+# profile is on a piece of the route that could not be smoothed (the same
+# distance as the chunk join tolerance); the record then gets raw DEM
+# elevations instead (enrich_segment_raw_dem).
+PROFILE_MAX_DIST_FT = 100.0
 
 # Number of CPU cores to use for parallel route enrichment.
 # Reduce if your computer becomes unresponsive during processing.
@@ -135,9 +162,15 @@ ALL_FIPS = [
     "45", "46", "47", "48", "49", "50", "51", "53", "54", "55", "56", "72"
 ]
 
+# Settings read from run_params.json when run from the GUI (smoothing
+# factors, chunking and the other core parameters); empty otherwise.
+RUN_PARAMS = {}
+
 # Bin label sets for horizontal and vertical replacement
-H_BINS = ["CURVES_A", "CURVES_B", "CURVES_C", "CURVES_D", "CURVES_E", "CURVES_F"]
-V_BINS = ["GRADES_A", "GRADES_B", "GRADES_C", "GRADES_D", "GRADES_E", "GRADES_F"]
+# HPMS field names (lower case, as Socrata returns them). The RAT values are
+# written into these same fields, matched without regard to case.
+H_BINS = ["curves_a", "curves_b", "curves_c", "curves_d", "curves_e", "curves_f"]
+V_BINS = ["grades_a", "grades_b", "grades_c", "grades_d", "grades_e", "grades_f"]
 
 
 # ---------------------------------------------------------------------------
@@ -146,128 +179,92 @@ V_BINS = ["GRADES_A", "GRADES_B", "GRADES_C", "GRADES_D", "GRADES_E", "GRADES_F"
 def replace_curve_grade_fields(
     out_df: pd.DataFrame,
     horizontal_csv: str,
-    vertical_csv:   str,
+    grades_csv:     str,
 ) -> pd.DataFrame:
     """
     Replaces HPMS-reported CURVES_A–F and GRADES_A–F fields with values
-    derived from the RAT alignment output.
+    derived from the RAT alignment output. The values go into the HPMS
+    fields themselves (matched without regard to case; added in lower case
+    if the data has none), so the output never carries both the HPMS and
+    the RAT versions of a field.
 
-    For each HPMS segment the function finds all RAT curves whose calibrated
-    milepost range overlaps [Start_MP, End_MP], clips the overlap to the
-    segment bounds, and apportions the length in miles to the appropriate
-    bin class. CURVES_A and GRADES_A receive the section length remainder
-    after all higher-class curves are accounted for, correctly representing
-    tangent sections as Class A geometry.
+    For each HPMS segment the function finds all RAT horizontal curves (or
+    grade segments) whose calibrated milepost range overlaps [Start_MP,
+    End_MP], clips the overlap to the segment bounds, and apportions the
+    length in miles to the class. CURVES_A receives the remainder after the
+    B–F curves, so tangents count as class A. Grade segments cover the
+    whole route, so GRADES_A is their own class A length plus any part of
+    the section they do not reach.
 
-    A single RAT curve may contribute overlapping length to multiple adjacent
-    HPMS segments. The sum of CURVES_A–F for any segment will equal the
+    The sum of CURVES_A–F (and of GRADES_A–F) for any segment equals the
     section length (End_MP – Start_MP) to floating-point precision.
 
     Parameters
     ----------
     out_df          : enriched HPMS DataFrame with Start_MP and End_MP columns
     horizontal_csv  : path to RAT horizontal curve CSV
-    vertical_csv    : path to RAT vertical curve CSV
+    grades_csv      : path to RAT grade segment CSV
 
     Returns
     -------
-    out_df with CURVES_A–F and/or GRADES_A–F columns replaced in place.
+    (out_df, replaced) : out_df with CURVES_A–F and/or GRADES_A–F replaced,
+    and the names of the columns that were replaced.
     """
-    # NOTE ON RouteId DTYPE: horizontal_csv/vertical_csv are read fresh from
-    # disk below with plain pd.read_csv(), which infers each column's dtype
-    # independently. If a given curve file's RouteId values happen to be
-    # ALL purely numeric (e.g. "001"), pandas silently infers int64 and
-    # drops leading zeros -- while out_df's RouteId (built from the raw HPMS
-    # extract, which mixes numeric and alphanumeric route names like
-    # "18P144") stays as text. A later comparison between an int64 column
-    # and a text column doesn't raise on .isin() -- it just silently
-    # matches nothing, meaning every segment on that route silently gets
-    # marked as having NO curves/grades, with no error or warning. Forcing
-    # RouteId to string here, and again right after each CSV read below,
-    # eliminates this regardless of which side would otherwise have been
-    # inferred as numeric.
-    if "RouteId" in out_df.columns:
-        out_df = out_df.copy()
-        out_df["RouteId"] = out_df["RouteId"].astype(str)
+    replaced = []
 
     def _apply_replacement(df: pd.DataFrame, curves: pd.DataFrame,
                            bin_col: str, bins: list) -> pd.DataFrame:
         """
-        Core overlap apportionment logic shared by horizontal and vertical.
-        bin_col : column in curves DataFrame containing the bin class letter
-        bins    : list of output column names [CLASS_A, CLASS_B, ... CLASS_F]
-
-        NOTE: The previous implementation looped over every row of df with
-        .iterrows() and, for each row, computed overlap against EVERY curve
-        in `curves` with no RouteId check at all. Two problems with that:
-          1. Performance: O(segments * curves) with an inner Python-level
-             enumerate() loop per segment -- effectively unbounded on a
-             state-wide segment table.
-          2. Correctness: because there was no RouteId match, a segment on
-             one route could be assigned curve/grade bin length from a
-             completely different route's curve, just because the milepost
-             ranges happened to numerically overlap. This silently corrupts
-             CURVES_A-F / GRADES_A-F for any state where two routes share
-             overlapping milepost ranges (extremely common, since mileposts
-             reset per route).
-        Replaced with a single vectorized merge scoped by RouteId, so a
-        segment can only be apportioned length from curves on its own
-        route, and the overlap/summation work is fully vectorized.
+        Overlap apportionment shared by curves and grades, matched within
+        each RouteId.
+        bin_col : column in curves holding the class letter
+        bins    : output column names [CLASS_A, CLASS_B, ... CLASS_F]
         """
+        bin_letters = ["A", "B", "C", "D", "E", "F"]
+        existing = {c.lower(): c for c in df.columns}
+        bins = [existing.get(b.lower(), b) for b in bins]
+        bin_map = dict(zip(bin_letters, bins))
         for col in bins:
             df[col] = 0.0
+        replaced.extend(bins)
 
-        required = {"RouteId", "Calibrated_Start_MP", "Calibrated_End_MP", bin_col}
-        has_curves = (
-            not curves.empty
-            and required.issubset(curves.columns)
-            and "RouteId" in df.columns
-        )
+        by_route = {}
+        all_items = None
+        use_route = "RouteId" in curves.columns and "RouteId" in df.columns
+        if use_route:
+            for rid, grp in curves.groupby("RouteId"):
+                by_route[rid] = (grp["Calibrated_Start_MP"].to_numpy(dtype=float),
+                                 grp["Calibrated_End_MP"].to_numpy(dtype=float),
+                                 grp[bin_col].astype(str).to_numpy())
+        else:
+            all_items = (curves["Calibrated_Start_MP"].to_numpy(dtype=float),
+                         curves["Calibrated_End_MP"].to_numpy(dtype=float),
+                         curves[bin_col].astype(str).to_numpy())
 
-        if has_curves:
-            df["_orig_idx"] = df.index
-            left = df[["_orig_idx", "RouteId", "Start_MP", "End_MP"]]
-            right = curves[["RouteId", "Calibrated_Start_MP", "Calibrated_End_MP", bin_col]]
-            merged = left.merge(right, on="RouteId", how="inner")
-            if not merged.empty:
-                overlap = (
-                    np.minimum(merged["End_MP"], merged["Calibrated_End_MP"])
-                    - np.maximum(merged["Start_MP"], merged["Calibrated_Start_MP"])
-                )
-                merged = merged.assign(overlap=overlap.clip(lower=0))
-                merged = merged[(merged["overlap"] > 0) & (merged[bin_col] != "A")]
-
-                bin_letters = ["A", "B", "C", "D", "E", "F"]
-                bin_map = dict(zip(bin_letters, bins))
-                merged = merged.assign(out_col=merged[bin_col].map(bin_map)).dropna(subset=["out_col"])
-
-                if not merged.empty:
-                    pivot = merged.groupby(["_orig_idx", "out_col"])["overlap"].sum().unstack(fill_value=0.0)
-                    for col in pivot.columns:
-                        df.loc[pivot.index, col] = pivot[col].values
-            df = df.drop(columns=["_orig_idx"])
-
-        # CLASS_A / GRADES_A gets the remainder of the section length after
-        # all higher-class bins are accounted for (tangent/no-curve length).
-        seg_len = (df["End_MP"] - df["Start_MP"]).clip(lower=0)
-        non_a_total = df[bins[1:]].sum(axis=1)
-        df[bins[0]] = (seg_len - non_a_total).clip(lower=0)
-        for col in bins:
-            df[col] = df[col].round(6)
+        for idx, row in df.iterrows():
+            s_mp = float(row["Start_MP"])
+            e_mp = float(row["End_MP"])
+            seg_len = e_mp - s_mp
+            if seg_len <= 0:
+                continue
+            items = by_route.get(row["RouteId"]) if use_route else all_items
+            totals = {col: 0.0 for col in bins}
+            if items is not None:
+                c_start, c_end, c_bin = items
+                overlaps = np.maximum(0.0, np.minimum(c_end, e_mp) - np.maximum(c_start, s_mp))
+                for letter in bin_letters[1:]:
+                    totals[bin_map[letter]] = float(overlaps[c_bin == letter].sum())
+            non_a_total = sum(totals[bin_map[x]] for x in bin_letters[1:])
+            totals[bins[0]] = max(0.0, seg_len - non_a_total)
+            for col, val in totals.items():
+                df.at[idx, col] = round(val, 6)
 
         return df
-
-    # Strip any existing curves/grades fields (case-insensitive) from the input 
-    # to prevent duplicate column schema errors when exporting to GeoPackage.
-    all_bins = [b.upper() for b in H_BINS + V_BINS]
-    drop_cols = [c for c in out_df.columns if c.upper() in all_bins]
-    if drop_cols:
-        out_df.drop(columns=drop_cols, inplace=True)
 
     # --- Horizontal replacement ---
     if horizontal_csv and os.path.exists(horizontal_csv):
         try:
-            h_df = pd.read_csv(horizontal_csv, low_memory=False, dtype={"RouteId": str})
+            h_df = pd.read_csv(horizontal_csv, low_memory=False)
             required_h = {"Calibrated_Start_MP", "Calibrated_End_MP", "Bin"}
             if required_h.issubset(set(h_df.columns)):
                 # Filter to routes present in out_df if RouteId is available
@@ -287,56 +284,95 @@ def replace_curve_grade_fields(
         except Exception as e:
             logging.error(f"Failed to apply horizontal curve replacement: {e}")
 
-    # --- Vertical replacement ---
-    if vertical_csv and os.path.exists(vertical_csv):
+    # --- Grade replacement ---
+    if grades_csv and os.path.exists(grades_csv):
         try:
-            v_df = pd.read_csv(vertical_csv, low_memory=False, dtype={"RouteId": str})
-            required_v = {"Calibrated_Start_MP", "Calibrated_End_MP", "Grade_Bin"}
-            if required_v.issubset(set(v_df.columns)):
-                if "RouteId" in v_df.columns and "RouteId" in out_df.columns:
-                    v_df = v_df[v_df["RouteId"].isin(out_df["RouteId"].unique())]
-                out_df = _apply_replacement(out_df, v_df, "Grade_Bin", V_BINS)
+            g_df = pd.read_csv(grades_csv, low_memory=False)
+            required_g = {"Calibrated_Start_MP", "Calibrated_End_MP", "Grade_Bin"}
+            if required_g.issubset(set(g_df.columns)):
+                if "RouteId" in g_df.columns and "RouteId" in out_df.columns:
+                    g_df = g_df[g_df["RouteId"].isin(out_df["RouteId"].unique())]
+                out_df = _apply_replacement(out_df, g_df, "Grade_Bin", V_BINS)
                 logging.info(
-                    f"Vertical grade fields replaced using RAT output: "
-                    f"{os.path.basename(vertical_csv)}"
+                    f"Grade fields replaced using RAT output: "
+                    f"{os.path.basename(grades_csv)}"
                 )
             else:
-                missing = required_v - set(v_df.columns)
+                missing = required_g - set(g_df.columns)
                 logging.warning(
-                    f"Vertical CSV missing required columns {missing}. "
-                    "GRADES_A–F not replaced."
+                    f"Grades CSV missing required columns {missing}. "
+                    "GRADES_A–F not replaced. Use the alignment_grades_*.csv file."
                 )
         except Exception as e:
-            logging.error(f"Failed to apply vertical grade replacement: {e}")
+            logging.error(f"Failed to apply grade replacement: {e}")
 
-    return out_df
+    return out_df, replaced
 
 
 # ---------------------------------------------------------------------------
-# Multiprocessing Worker Function
+# Worker: smoothed profile of one work item
 # ---------------------------------------------------------------------------
-def process_4d_route(route_id: str, sub: pd.DataFrame, dem_dir: str, params: dict, nbi_nti_gdf: gpd.GeoDataFrame = None):
-    results = {}
-    predominant_f_sys = int(sub["FSystem"].mode()[0])
+def process_4d_item(route_id: str, item: dict, item_subset: pd.DataFrame, cache_dir: str, params: dict):
+    """
+    Smoothed 3D profile of one work item: a whole continuity chunk, or one
+    padded piece of a long chunk (core.rat_core.split_chunks_for_parallelism),
+    as the alignment does. The profile is cut to the item's own (unpadded)
+    milepost range, so the pieces of a route do not overlap.
 
-    macro_coords_wgs = []
-    macro_z_vals     = []
-
-    lines = stitch_linestrings_ordered(sub["WKT"].tolist())
-    for line in lines:
-        chunk_res = smooth_plan_profile_from_linestring(
-            line, dem_dir, params, predominant_f_sys,
-            route_id=route_id, hpms_subset=sub, nbi_nti_gdf=nbi_nti_gdf
+    Returns (route_id, coords_wgs, z_m), or None if the item could not be
+    smoothed. NBI/NTI structures come from core.rat_core.WORKER_NBI_NTI_GDF,
+    set once per process by init_worker_nbi().
+    """
+    from core.rat_core import download_dem_cell, get_line_dem_cells, WORKER_NBI_NTI_GDF
+    try:
+        # Normally already cached by the state-wide download.
+        for lon_idx, lat_idx in get_line_dem_cells([item["geom"]]):
+            download_dem_cell(lon_idx, lat_idx, cache_dir)
+        res = smooth_plan_profile_from_linestring(
+            item["geom"], cache_dir, params, item["f_sys"],
+            route_id=route_id, chunk_s_mp=item["calib_start_mp"], chunk_e_mp=item["calib_end_mp"],
+            hpms_subset=item_subset, nbi_nti_gdf=WORKER_NBI_NTI_GDF,
         )
-        if chunk_res is not None and chunk_res.get("ok", True):
-            macro_coords_wgs.extend(chunk_res["coords_wgs_smooth"])
-            macro_z_vals.extend(chunk_res["z_smooth"])
+    except Exception as e:
+        # A lost DEM folder stops the run (DemCacheUnavailable reaches the
+        # main process) rather than failing every remaining task.
+        raise_if_dem_cache_lost(cache_dir, e)
+        logging.error(f"Worker failed on route {route_id} Part {item.get('part_id')}: {e}")
+        return None
+    if not profile_result_ok(res):
+        # A missing folder makes elevation reads fail quietly.
+        raise_if_dem_cache_lost(cache_dir)
+        return None
 
-    if not macro_coords_wgs:
-        return results
+    d_axis = np.asarray(res["d_axis"], dtype=float)
+    total_len = max(float(d_axis[-1]), 1.0)
+    mp = item["calib_start_mp"] + d_axis / total_len * (item["calib_end_mp"] - item["calib_start_mp"])
+    keep = (mp >= item["emit_start_mp"]) & (mp <= item["emit_end_mp"])
+    if not keep.any():
+        return None
+    coords = [c for c, k in zip(res["coords_wgs_smooth"], keep) if k]
+    z_m = np.asarray(res["z_smooth"], dtype=float)[keep]
+    return route_id, coords, z_m
 
-    tree, tx      = build_metric_kdtree(macro_coords_wgs)
-    macro_z_array = np.array(macro_z_vals)
+
+# ---------------------------------------------------------------------------
+# Worker: HPMS records of one route placed on its profile
+# ---------------------------------------------------------------------------
+def map_route_to_profile(sub: pd.DataFrame, coords_wgs: list, z_m: np.ndarray) -> dict:
+    """
+    Gives every vertex of each HPMS record of one route the elevation of
+    the nearest point of the route's smoothed profile (metric KDTree), and
+    a milepost interpolated from the record's Start_MP and End_MP by
+    distance along the record. Each record is placed once, against the
+    whole route's profile. A record with a vertex more than
+    PROFILE_MAX_DIST_FT from every smoothed point lies on a piece of the
+    route that could not be smoothed; it is left for the raw DEM fallback
+    rather than given elevations from another piece of the route.
+
+    Returns {row index: {"geometry_3d": LineString Z, "WKT_ZM": str}}.
+    """
+    results = {}
+    tree, tx = build_metric_kdtree(coords_wgs)
 
     for row_idx, row in sub.iterrows():
         try:
@@ -350,8 +386,8 @@ def process_4d_route(route_id: str, sub: pd.DataFrame, dem_dir: str, params: dic
             for part in parts:
                 coords = list(part.coords)
                 for i in range(1, len(coords)):
-                    x1, y1 = tx.transform(*coords[i-1])
-                    x2, y2 = tx.transform(*coords[i])
+                    x1, y1 = tx.transform(*coords[i-1][:2])
+                    x2, y2 = tx.transform(*coords[i][:2])
                     total_geom_len_m += math.hypot(x2 - x1, y2 - y1)
 
             if total_geom_len_m == 0:
@@ -365,9 +401,11 @@ def process_4d_route(route_id: str, sub: pd.DataFrame, dem_dir: str, params: dic
             xyzm_txt = []
 
             for part in parts:
-                raw_coords = list(part.coords)
-                q_idx      = query_metric_kdtree(tree, tx, raw_coords)
-                z_assigned = macro_z_array[q_idx]
+                raw_coords = [c[:2] for c in part.coords]
+                q_idx, q_dist = query_metric_kdtree(tree, tx, raw_coords, return_dist=True)
+                if np.max(q_dist) * FEET_PER_METER > PROFILE_MAX_DIST_FT:
+                    raise _OffProfile
+                z_assigned = z_m[q_idx]
 
                 for i, (lon, lat) in enumerate(raw_coords):
                     if i > 0:
@@ -383,34 +421,35 @@ def process_4d_route(route_id: str, sub: pd.DataFrame, dem_dir: str, params: dic
                     xyz.append((lon, lat, float(z)))
                     xyzm_txt.append(f"{lon:.7f} {lat:.7f} {float(z):.2f} {m:.4f}")
 
-            geom3d = LineString(xyz)
-            wkt_zm = f"LINESTRING ZM ({', '.join(xyzm_txt)})"
-
             results[row_idx] = {
-                "geometry_3d": geom3d,
-                "WKT_ZM":      wkt_zm,
+                "geometry_3d": LineString(xyz),
+                "WKT_ZM":      f"LINESTRING ZM ({', '.join(xyzm_txt)})",
             }
+        except _OffProfile:
+            continue
         except Exception:
             continue
 
     return results
 
 
+class _OffProfile(Exception):
+    """A record not covered by the route's smoothed profile."""
+
+
 # ---------------------------------------------------------------------------
-# Raw DEM Fallback Enrichment
+# Raw DEM fallback
 # ---------------------------------------------------------------------------
-def enrich_segment_raw_dem(row: pd.Series, dem_dir: str) -> dict | None:
+def enrich_segment_raw_dem(row: pd.Series, dem) -> dict | None:
     """
-    Fallback enrichment for a single HPMS segment when the smoothed
-    macro-profile pipeline produced no result for its route.
-
-    Samples USGS DEM elevation directly at each original vertex coordinate
-    using get_elevations(), bypassing the UnivariateSpline smoother and
-    KDTree entirely. Milepost values are interpolated proportionally from
-    Start_MP and End_MP using cumulative geometric distance.
-
-    Returns a result dict in the same format as process_4d_route(), or None
-    if the geometry cannot be parsed or no DEM coverage exists.
+    Fallback for an HPMS record on a piece of route that could not be
+    smoothed (usually a very short piece), or on a route with no smoothed
+    profile at all. Elevations are sampled directly from the
+    cached 1 m DEM tiles (dem: core.rat_cross_section.DemTiles) at each
+    original vertex; mileposts are interpolated from Start_MP and End_MP.
+    Gaps in the DEM are filled along the record. Returns a result in the
+    same form as map_route_to_profile(), or None if the geometry cannot be
+    read or no DEM value is found.
     """
     try:
         g = loads(row["WKT"]) if isinstance(row["WKT"], str) else shape(row["WKT"])
@@ -420,28 +459,39 @@ def enrich_segment_raw_dem(row: pd.Series, dem_dir: str) -> dict | None:
         parts = list(g.geoms) if g.geom_type == "MultiLineString" else [g]
 
         all_coords = []
+        part_starts = set()
         for part in parts:
-            all_coords.extend(list(part.coords))
+            part_starts.add(len(all_coords))
+            all_coords.extend(c[:2] for c in part.coords)
 
         if len(all_coords) < 2:
             return None
 
-        # Ensure the 10-meter DEM tiles for this segment are downloaded before sampling
-        download_dems([row["WKT"]], dem_dir)
+        lon_arr = np.array([c[0] for c in all_coords], dtype=float)
+        lat_arr = np.array([c[1] for c in all_coords], dtype=float)
+        # Distance along the record in meters (UTM), so mileposts are
+        # spaced by true length whatever the record's direction.
+        utm = get_appropriate_utm_zone(lon_arr[0], lat_arr[0])
+        x_m, y_m = Transformer.from_crs("EPSG:4326", f"EPSG:{utm}", always_xy=True).transform(lon_arr, lat_arr)
+        # The jump between the parts of a multipart record is not counted,
+        # as on the smoothed path (distance along the line work only).
+        steps = np.hypot(np.diff(x_m), np.diff(y_m))
+        for k in part_starts - {0}:
+            steps[k - 1] = 0.0
+        cum_dists = np.concatenate([[0.0], np.cumsum(steps)])
 
-        # Sample raw DEM elevation at each vertex
-        z_vals = get_elevations([(lon, lat) for lon, lat in all_coords], dem_dir)
+        # Gaps in the DEM are filled by straight-line interpolation along the
+        # record by distance; vertices before the first or after the last
+        # value take that value.
+        z_vals = np.asarray(dem.sample(lon_arr, lat_arr), dtype=float)
+        ok = np.isfinite(z_vals)
+        if not ok.any():
+            return None
+        if not ok.all():
+            z_vals = np.interp(cum_dists, cum_dists[ok], z_vals[ok])
 
-        # Compute cumulative distances for milepost interpolation
         row_s_mp = float(row["Start_MP"])
         row_e_mp = float(row["End_MP"])
-
-        cum_dists = [0.0]
-        for i in range(1, len(all_coords)):
-            lon1, lat1 = all_coords[i-1]
-            lon2, lat2 = all_coords[i]
-            d = math.hypot(lon2 - lon1, lat2 - lat1)
-            cum_dists.append(cum_dists[-1] + d)
 
         total_dist = cum_dists[-1] if cum_dists[-1] > 0 else 1e-9
 
@@ -451,7 +501,7 @@ def enrich_segment_raw_dem(row: pd.Series, dem_dir: str) -> dict | None:
         for i, (lon, lat) in enumerate(all_coords):
             f = cum_dists[i] / total_dist
             m = row_s_mp + f * (row_e_mp - row_s_mp)
-            z = float(z_vals[i]) if not np.isnan(z_vals[i]) else 0.0
+            z = float(z_vals[i])
             xyz.append((lon, lat, z))
             xyzm_txt.append(f"{lon:.7f} {lat:.7f} {z:.2f} {m:.4f}")
 
@@ -464,79 +514,45 @@ def enrich_segment_raw_dem(row: pd.Series, dem_dir: str) -> dict | None:
         return None
 
 
-# ===========================================================================
-# V3.4 HIGH-RESOLUTION 1M EPHEMERAL GRID WORKER ENGINE
-# ===========================================================================
-
-def process_4d_enrichment_tile_worker(bbox: tuple, subset_df: pd.DataFrame, base_dem_dir: str, params: dict):
-    """
-    V3.4 Multiprocessing Grid Worker.
-    Ingests an explicit bounding box, downloads a temporary 1-meter raster tile,
-    snaps crossing 2D segments to derived 3D/4D profiles using the local macro-profile
-    smoother, deletes the raster file, and returns results.
-
-    NBI/NTI structures are read from the module-level _WORKER_NBI_NTI_GDF global,
-    set once per process by _init_worker_nbi() rather than passed per task.
-    """
-    import os
-    import logging
-    import pandas as pd
-    from core.rat_core import prepare_1m_tile_for_worker
-    from apps.hpms_4d_enricher_cli import process_4d_route, _WORKER_NBI_NTI_GDF
-
-    # Download 1-degree tile(s) covering this cell if not already cached.
-    # Shares a cache folder with the alignment pipeline's grid worker (see
-    # prepare_1m_tile_for_worker's docstring) -- previously this used its
-    # own separate "enrich_4d_1m_cache" folder, so the exact same USGS 1m
-    # tiles got downloaded twice whenever both pipelines ran for the same
-    # state, which is the common case.
-    shared_cache_dir = prepare_1m_tile_for_worker(bbox, base_dem_dir, params)
-
-    tile_results = {}
-    try:
-        for rid, route_subset in subset_df.groupby("RouteId"):
-            res = process_4d_route(rid, route_subset, shared_cache_dir, params, _WORKER_NBI_NTI_GDF)
-            if res:
-                tile_results.update(res)
-    except Exception as e:
-        logging.error(f"Worker process failed on grid tile {bbox}: {e}")
-
-    return tile_results
-
-
 def run_state_enrichment(state_fips: str, local_df: pd.DataFrame = None, display_fips: str = None):
     """
-    Upgraded Core 4D Orchestrator. Slices the target state network footprint into 
-    0.02 degree spatial cells, distributes them to parallel workers using an
-    ephemeral 1m data pipeline, and applies the raw DEM fallback seamlessly.
+    Enriches one state the way the alignment processes it: each route is
+    built into continuity chunks once, long chunks are split into padded
+    pieces, and the pieces are smoothed in parallel against the shared 1 m
+    DEM cache. The HPMS records of each route are then placed on the
+    route's profile, and records on routes that could not be smoothed take
+    their elevations directly from the DEM.
+
+    The output version is claimed when the run starts
+    (core.rat_core.claim_output_version, on the CSV name), so two runs can
+    never write to the same files; the placeholder is removed if the run
+    ends without writing the CSV.
     """
-    import shutil
-    from shapely.wkt import loads
-    from shapely.geometry import box
-    from concurrent.futures import ProcessPoolExecutor, as_completed
-
     label = display_fips if display_fips else state_fips
-
     state_out_dir = os.path.join(OUTPUT_DIR, f"Output_State_{label}")
-    os.makedirs(state_out_dir, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d")
+    version, csv_out = claim_output_version(
+        state_out_dir, f"hpms_4d_production_{label}_{stamp}_v{{v}}.csv")
+    try:
+        _run_state_enrichment(state_fips, local_df, label, state_out_dir, stamp, version, csv_out)
+    finally:
+        release_output_version(csv_out)
 
-    version = 1
-    while True:
-        csv_out     = os.path.join(state_out_dir, f"hpms_4d_production_{label}_{stamp}_v{version}.csv")
-        gpkg_out    = os.path.join(state_out_dir, f"hpms_4d_production_{label}_{stamp}_v{version}.gpkg")
-        blender_out = os.path.join(state_out_dir, f"hpms_4d_blender_export_{label}_{stamp}_v{version}.shp")
-        if not os.path.exists(csv_out):
-            break
-        version += 1
 
-    logging.info(f"\n{'='*60}\n=== V3.4 GRID 4D ENRICHMENT: STATE FIPS {label} (v{version}) ===\n{'='*60}")
+def _run_state_enrichment(state_fips: str, local_df: pd.DataFrame, label: str,
+                          state_out_dir: str, stamp: str, version: int, csv_out: str):
+    from core.rat_core import GridProgressWindow
+    from core.rat_cross_section import DemTiles
 
-    user_params = GLOBAL_PARAMS_JSON.copy()
-    user_params["OUTPUT_DIR"] = OUTPUT_DIR
-    user_params["STATE_FIPS"] = state_fips
+    gpkg_out    = os.path.join(state_out_dir, f"hpms_4d_production_{label}_{stamp}_v{version}.gpkg")
+    blender_out = os.path.join(state_out_dir, f"hpms_4d_blender_export_{label}_{stamp}_v{version}.shp")
 
-    params = build_params(user_params)
+    logging.info(f"\n{'='*60}\n=== 4D ENRICHMENT: STATE FIPS {label} (v{version}) ===\n{'='*60}")
+
+    # The run's settings (from the GUI's run_params.json when run from the
+    # GUI), with this state's FIPS for the smoothing-factor lookup.
+    user_params = dict(RUN_PARAMS)
+    user_params.update({"OUTPUT_DIR": OUTPUT_DIR, "STATE_FIPS": label})
 
     if SELECTED_HPMS_FIELDS is not None:
         include_fields = SELECTED_HPMS_FIELDS
@@ -546,164 +562,178 @@ def run_state_enrichment(state_fips: str, local_df: pd.DataFrame = None, display
         include_fields = []
 
     params = build_params(user_params)
+    logging.info(describe_smoothing_factors(params))
 
     try:
         if local_df is not None:
+            # The same state, facility type and functional system filters a
+            # Socrata query applies, as in the alignment.
             df = local_df.copy()
-            # Shared helper in rat_core.py -- same filter logic used by
-            # rat_alignment_cli.py, applies the state filter the live
-            # Socrata query would have applied server-side.
-            df = filter_local_df_to_state(df, state_fips)
-            # NOTE: previously missing -- the facility-type/fsystem filters
-            # were only ever applied in the fetch_socrata_state() branch
-            # below, which never runs when a cached/local extract is
-            # supplied. This let ramps and non-inventory-direction rows
-            # through to 4D enrichment output (shapefile/GPKG/CSV) even
-            # though FACILITY_TYPE_FILTER was correctly set to [1, 2].
+            df = filter_local_df_to_state(df, label)
             df = apply_facility_fsystem_filters(
                 df,
-                facility_filter=FACILITY_TYPE_FILTER,
-                fsystem_filter=FSYSTEM_FILTER,
+                facility_filter=FACILITY_TYPE_FILTER or None,
+                fsystem_filter=FSYSTEM_FILTER or None,
+                include_missing_facility=FACILITY_TYPE_INCLUDE_MISSING,
+                include_missing_fsystem=FSYSTEM_INCLUDE_MISSING,
             )
         else:
             df = fetch_socrata_state(
                 state_fips,
-                SOCRATA_TOKEN,
+                SOCRATA_TOKEN or ENV_SOCRATA_TOKEN,
                 facility_type_filter=FACILITY_TYPE_FILTER or None,
                 fsystem_filter=FSYSTEM_FILTER or None,
-                extra_cols=include_fields if include_fields else []
+                include_missing_facility=FACILITY_TYPE_INCLUDE_MISSING,
+                include_missing_fsystem=FSYSTEM_INCLUDE_MISSING,
+                extra_cols=include_fields if include_fields else [],
+                url=SOCRATA_URL,
             )
     except Exception as e:
-        logging.error(f"Failed to fetch data for State {state_fips}: {e}")
+        logging.error(f"Failed to fetch data for State {label}: {e}")
         return
 
     routes = df["RouteId"].dropna().unique().tolist()
     logging.info(f"Loaded {len(df):,} segments across {len(routes):,} routes.")
 
-    nbi_url = user_params.get("NBI_URL", None)
-    nti_url = user_params.get("NTI_URL", None)
-    nbi_nti_gdf = fetch_nbi_nti_state(state_fips, "", nbi_url, nti_url)
+    if len(df) == 0:
+        logging.error(
+            f"No rows loaded for State FIPS {label}; stopping. If a cached "
+            f"Socrata extract is being reused, it may be for a different "
+            f"state. Turn off 'Reuse Socrata Cache' or delete the cached "
+            f"extract to download State FIPS {label} again."
+        )
+        return
 
     # ------------------------------------------------------------------
-    # MAP FOOTPRINT TO GEOGRAPHIC EXTENT CELLS
+    # NBI/NTI structures and DEM tiles
     # ------------------------------------------------------------------
-    logging.info("Calculating network boundaries and slicing spatial cells...")
+    logging.info("Reading the state's geometry...")
     df['geom_obj'] = df['WKT'].apply(loads)
-    total_bounds = gpd.GeoSeries(df['geom_obj']).total_bounds
-    minx, miny, maxx, maxy = total_bounds
 
-    # Pre-fetch every DEM tile this run will need, in one serial call,
-    # before any parallel worker starts -- same fix and same reasoning as
-    # the alignment pipeline's prefetch (see run_state_alignment). Without
-    # this, every worker discovering its own tile need on demand creates
-    # contention whenever a state's footprint is geographically
-    # concentrated onto few tiles. Shares a cache folder with the
-    # alignment pipeline, so if that already ran for this state, this is
-    # typically close to a no-op.
-    shared_cache_dir = os.path.join(DEM_DIR, "align_1m_cache")
-    os.makedirs(shared_cache_dir, exist_ok=True)
-    logging.info(
-        f"Pre-fetching DEM tile(s) for the full state footprint "
-        f"({minx:.2f},{miny:.2f}) to ({maxx:.2f},{maxy:.2f}) before starting parallel processing..."
-    )
-    from core.rat_core import download_high_res_dem_tile
-    lat_start, lat_end = int(np.floor(miny)), int(np.ceil(maxy))
-    lon_start, lon_end = int(np.floor(minx)), int(np.ceil(maxx))
-    for lat_deg in range(lat_start, lat_end):
-        for lon_deg in range(lon_start, lon_end):
-            download_high_res_dem_tile((lon_deg, lat_deg, lon_deg + 1, lat_deg + 1), shared_cache_dir)
-    logging.info("Pre-fetch complete -- no DEM downloads should be needed during parallel processing.")
-    
-    # Partition space into 0.02 degree grid chunks (~1.3 mile squares)
-    x_ticks = np.arange(minx, maxx + 0.02, 0.02)
-    y_ticks = np.arange(miny, maxy + 0.02, 0.02)
+    # The national NBI/NTI tables are cut down to the state's padded
+    # bounding box (see core.rat_core.compute_padded_bbox).
+    state_bbox = compute_padded_bbox(df['geom_obj'])
+    nbi_nti_gdf = fetch_nbi_nti_state(label, bbox=state_bbox)
 
-    grid_cells = []
-    for x in x_ticks:
-        for y in y_ticks:
-            grid_cells.append((x, y, x + 0.02, y + 0.02))
+    # Every 1 m tile the state needs, in the cache the alignment and
+    # plan/profile runs share, downloaded before the workers start.
+    cache_dir = os.path.join(DEM_DIR, "align_1m_cache")
+    ensure_dem_cells_cached(df['geom_obj'], cache_dir, log_label=f"state {label}", along_lines=True)
 
-    # Build STRtree spatial index for fast cell-to-segment intersection.
-    # Replaces O(n*m) row-by-row lambda with O(n log m) indexed queries --
-    # critical for large states and national runs with millions of segments.
-    from shapely.strtree import STRtree
-    logging.info(f"  Building spatial index over {len(df):,} segments...")
-    geom_list = df['geom_obj'].tolist()
-    tree = STRtree(geom_list)
-    df_index = df.index.tolist()
-
-    spatial_tasks = []
-    for cell_bbox in grid_cells:
-        cell_box = box(*cell_bbox)
-        candidate_positions = tree.query(cell_box)
-        if len(candidate_positions) == 0:
+    # ------------------------------------------------------------------
+    # Continuity chunks and work items, as in rat_alignment_cli.py
+    # ------------------------------------------------------------------
+    logging.info(f"  Building route continuity chunks for {len(routes):,} routes...")
+    work_items = []
+    has_mp_cols = "Start_MP" in df.columns and "End_MP" in df.columns
+    pad_mi = float(params.get("CHUNK_SPLIT_PADDING_FT", 20000.0)) / 5280.0
+    n_routes, n_mixed = 0, 0
+    for route_id, route_subset in df.groupby("RouteId"):
+        all_chunks = build_route_continuity_chunks(route_id, route_subset, params)
+        if not all_chunks:
             continue
-        matched_idx = [
-            df_index[pos] for pos in candidate_positions
-            if geom_list[pos].intersects(cell_box)
-        ]
-        if matched_idx:
-            spatial_tasks.append((cell_bbox, df.loc[matched_idx].copy()))
+        n_routes += 1
+        n_mixed += route_spans_several_fsystems(all_chunks)
+        for item in split_chunks_for_parallelism(route_id, all_chunks, params):
+            # Each item gets only the route records within its milepost
+            # window plus padding (used for the structure checks).
+            if has_mp_cols:
+                lo = item["calib_start_mp"] - pad_mi
+                hi = item["calib_end_mp"] + pad_mi
+                item_subset = route_subset[(route_subset["End_MP"] > lo) & (route_subset["Start_MP"] < hi)]
+            else:
+                item_subset = route_subset
+            work_items.append((route_id, item, item_subset.drop(columns=["geom_obj"])))
+    log_fsystem_summary(n_mixed, n_routes)
+    logging.info(f"Network partitioned into {len(work_items):,} chunk-based parallel tasks.")
 
-    logging.info(f"State network mapped into {len(spatial_tasks):,} active intersecting grid tasks.")
-
+    profiles = {}   # route_id -> ([coords], [z arrays])
     master_results = {}
     completed = 0
-    
-    # Fire up parallel workers over the geographic grid array
-    logging.info(f"Spinning up {MAX_WORKERS} CPU cores for parallel grid processing...")
-    
-    # Trigger the floating progress window
-    from core.rat_core import GridProgressWindow
-    progress_ui = GridProgressWindow(f"RAT 4D Engine: State {label}", len(spatial_tasks))
-    
+
+    logging.info(f"Starting {MAX_WORKERS} worker processes...")
+    progress_ui = GridProgressWindow(f"RAT 4D Engine: State {label}", len(work_items))
+
     with ProcessPoolExecutor(
         max_workers=MAX_WORKERS,
-        initializer=_init_worker_nbi,
+        initializer=init_worker_nbi,
         initargs=(nbi_nti_gdf,)
     ) as executor:
-        futures = {
-            executor.submit(process_4d_enrichment_tile_worker, bbox, frame, DEM_DIR, params): bbox 
-            for bbox, frame in spatial_tasks
-        }
+        # Tasks are submitted a few at a time (core.rat_core.run_bounded_parallel).
+        MAX_IN_FLIGHT = MAX_WORKERS * 4
 
-        for fut in as_completed(futures):
+        # 1. Smoothed profile of each work item
+        def _submit(task):
+            route_id, item, item_subset = task
+            return executor.submit(process_4d_item, route_id, item, item_subset, cache_dir, params)
+
+        def _on_done(task, fut):
+            nonlocal completed
+            route_id, item, _ = task
             completed += 1
-            progress_ui.update(completed)  # Update the visual bar
-            
+            progress_ui.update(completed)
             if completed % 50 == 0:
-                logging.info(f"   ...Enriched {completed}/{len(spatial_tasks)} geographic tiles")
+                logging.info(f"   ...Smoothed {completed}/{len(work_items)} route chunks")
             try:
                 res = fut.result()
                 if res:
-                    master_results.update(res)
+                    rid, coords, z_m = res
+                    entry = profiles.setdefault(rid, ([], []))
+                    entry[0].extend(coords)
+                    entry[1].append(z_m)
+            except DemCacheUnavailable:
+                raise
             except Exception as e:
-                logging.error(f"Grid box task {futures[fut]} failed during enrichment: {e}")
-                
-    progress_ui.close()  # Destroy the pop-up when the state finishes
+                logging.error(f"Chunk task {(route_id, item.get('part_id'))} failed: {e}")
 
-    # Map output lookups back to the master tracking dataframe
+        run_bounded_parallel(work_items, _submit, _on_done, max_in_flight=MAX_IN_FLIGHT)
 
-    # Map output lookups back to the master tracking dataframe
+        # 2. HPMS records placed on their route's profile
+        route_tasks = [
+            (rid, sub[["WKT", "Start_MP", "End_MP"]], profiles[rid][0], np.concatenate(profiles[rid][1]))
+            for rid, sub in df.groupby("RouteId") if rid in profiles
+        ]
+        logging.info(f"Placing HPMS records on {len(route_tasks):,} route profiles...")
+
+        def _submit_map(task):
+            _, sub, coords, z_m = task
+            return executor.submit(map_route_to_profile, sub, coords, z_m)
+
+        def _on_mapped(task, fut):
+            try:
+                master_results.update(fut.result())
+            except Exception as e:
+                logging.error(f"Placing records on route {task[0]} failed: {e}")
+
+        run_bounded_parallel(route_tasks, _submit_map, _on_mapped, max_in_flight=MAX_IN_FLIGHT)
+
+    progress_ui.close()
+
     df["geometry_3d"] = df.index.map(lambda i: master_results[i]["geometry_3d"] if i in master_results else None)
     df["WKT_ZM"] = df.index.map(lambda i: master_results[i]["WKT_ZM"] if i in master_results else None)
 
     # ------------------------------------------------------------------
-    # RAW DEM FALLBACK
+    # Raw DEM fallback
     # ------------------------------------------------------------------
-    missing_idx = df[df["geometry_3d"].isna()].index.tolist()
-    if missing_idx:
-        logging.info(f"Applying raw DEM fallback for {len(missing_idx):,} segments on routes that could not be smoothed...")
+    missing = df[df["geometry_3d"].isna()]
+    if not missing.empty and not dem_cache_reachable(cache_dir):
+        raise DemCacheUnavailable(f"The DEM folder {cache_dir} cannot be reached.")
+    if not missing.empty:
+        logging.info(f"Applying raw DEM fallback for {len(missing):,} records with no smoothed profile...")
+        # Sorted by location so neighbouring records reuse the same tiles.
+        first_pt = missing["geom_obj"].apply(lambda g: g.representative_point())
+        missing_idx = sorted(missing.index, key=lambda i: (round(first_pt[i].x, 2), round(first_pt[i].y, 2)))
+        dem = DemTiles(cache_dir)
         fallback_count = 0
         for idx in missing_idx:
-            result = enrich_segment_raw_dem(df.loc[idx], DEM_DIR)
+            result = enrich_segment_raw_dem(df.loc[idx], dem)
             if result:
                 df.at[idx, "geometry_3d"] = result["geometry_3d"]
                 df.at[idx, "WKT_ZM"]      = result["WKT_ZM"]
                 fallback_count += 1
         logging.info(f"Raw DEM fallback enriched {fallback_count:,} of {len(missing_idx):,} remaining segments.")
 
-    # Tag records with elevation sources for downstream analysis
+    # Which method produced each record's elevations
     df["Elevation_Source"] = df.index.map(
         lambda i: (
             "smoothed"     if i in master_results else
@@ -713,165 +743,210 @@ def run_state_enrichment(state_fips: str, local_df: pd.DataFrame = None, display
     )
 
     out_df = df[df["geometry_3d"].notna()].copy()
+    n_left_out = len(df) - len(out_df)
+    if n_left_out:
+        pct = 100.0 * n_left_out / max(len(df), 1)
+        msg = (f"{n_left_out:,} of {len(df):,} records ({pct:.1f}%) got no elevations and are left out "
+               f"of the 4D outputs (no smoothed profile and no DEM values along the record).")
+        if pct > MAX_UNENRICHED_PCT:
+            logging.error(msg)
+        else:
+            logging.warning(msg)
     if out_df.empty:
         logging.error("No 4D geometry generated. Run failed.")
         return
 
-    # Apply curve and grade value field replacements
-    if HORIZONTAL_CSV or VERTICAL_CSV:
-        out_df = replace_curve_grade_fields(out_df, HORIZONTAL_CSV, VERTICAL_CSV)
+    # Replace the HPMS curve and grade fields with RAT values, if asked
+    replaced_cols = []
+    if HORIZONTAL_CSV or GRADES_CSV:
+        out_df, replaced_cols = replace_curve_grade_fields(out_df, HORIZONTAL_CSV, GRADES_CSV)
 
-    # Handle selective column drop constraints
+    # Functional system and facility type as the State submitted them:
+    # records processed with no value are written blank again.
+    for col in ("FSystem", "Facility_Type"):
+        flag = f"{col}_Missing"
+        if flag in out_df.columns:
+            if col in out_df.columns:
+                out_df[col] = out_df[col].astype("Int64").mask(out_df[flag].astype(bool))
+            out_df = out_df.drop(columns=[flag])
+
+    # Columns to keep in the CSV
     if 'geom_obj' in out_df.columns:
         out_df = out_df.drop(columns=['geom_obj'])
 
     if include_fields is None:
         csv_drop_cols = ["WKT", "geometry_3d"]
-        logging.info(f"Full attribute pass-through enabled. Retaining fields in output CSV.")
+        logging.info("All HPMS fields are kept in the output CSV.")
     elif len(include_fields) == 0:
-        keep_cols     = ["RouteId", "FSystem", "Start_MP", "End_MP", "WKT_ZM"]
+        keep_cols     = ["RouteId", "FSystem", "Start_MP", "End_MP", "WKT_ZM", "Elevation_Source"]
         csv_drop_cols = [c for c in out_df.columns if c not in keep_cols]
         logging.info("Minimal 4D output enabled.")
     else:
-        core_keep     = {"RouteId", "FSystem", "Start_MP", "End_MP", "WKT_ZM"}
-        keep_cols     = core_keep | {f for f in include_fields if f in out_df.columns}
+        # Fields replaced with RAT values are kept even if not selected.
+        core_keep     = {"RouteId", "FSystem", "Start_MP", "End_MP", "WKT_ZM", "Elevation_Source"}
+        keep_cols     = core_keep | {f for f in include_fields if f in out_df.columns} | set(replaced_cols)
         csv_drop_cols = [c for c in out_df.columns if c not in keep_cols]
-        logging.info(f"Custom field selection subset tracking configured.")
+        logging.info("The selected HPMS fields are kept in the output CSV.")
 
-    # 1. Output the Production CSV
+    # 1. CSV
     out_df.drop(columns=csv_drop_cols, errors="ignore").to_csv(csv_out, index=False)
     logging.info(f"Saved enriched CSV: {os.path.basename(csv_out)}")
 
-    # 2. Output the Master GeoPackage
-    try:
-        gdf = gpd.GeoDataFrame(
-            out_df.drop(columns=["WKT"], errors="ignore"),
-            geometry="geometry_3d",
-            crs="EPSG:4326",
-        )
-        gdf.to_file(gpkg_out, driver="GPKG")
-        logging.info(f"Saved GeoPackage: {os.path.basename(gpkg_out)}")
-    except Exception as e:
-        logging.error(f"Failed to save GPKG: {e}")
+    if not (OUT_GPKG or OUT_SHP):
+        logging.info(f"Finished State {label}.")
+        return
 
-    # 3. Output the Blender-specific Shapefile
-    try:
-        utm_crs     = gdf.estimate_utm_crs()
-        gdf_blender = gdf.to_crs(utm_crs)
-        cols_to_drop = [c for c in gdf_blender.columns if c.upper() in ["WKT", "WKT_ZM"]]
-        gdf_blender  = gdf_blender.drop(columns=cols_to_drop, errors="ignore")
-        gdf_blender.to_file(blender_out)
-        logging.info(f"Saved Blender SHP: {os.path.basename(blender_out)} (Projected to {utm_crs.name})")
-    except Exception as e:
-        logging.error(f"Failed to save Blender shapefile: {e}")
+    # The GeoPackage and shapefile carry the same fields as the CSV (WKT_ZM
+    # is replaced by the 3D geometry).
+    gis_drop_cols = [c for c in csv_drop_cols if c != "geometry_3d"] + ["WKT", "WKT_ZM"]
+    # GeoPackage and shapefile field names ignore case, so two columns that
+    # differ only in case cannot both be written; keep the first.
+    seen, case_dups = set(), []
+    for c in out_df.columns:
+        if c in gis_drop_cols:
+            continue
+        if c.lower() in seen:
+            case_dups.append(c)
+        seen.add(c.lower())
+    if case_dups:
+        logging.warning(f"Columns left out of the GeoPackage/shapefile (same name as another "
+                        f"column apart from case): {', '.join(case_dups)}")
+        gis_drop_cols += case_dups
+    gdf = gpd.GeoDataFrame(
+        out_df.drop(columns=gis_drop_cols, errors="ignore"),
+        geometry="geometry_3d",
+        crs="EPSG:4326",
+    )
 
-    logging.info(f"Finished State {label}!")
+    # 2. GeoPackage
+    if OUT_GPKG:
+        try:
+            gdf.to_file(gpkg_out, driver="GPKG")
+            logging.info(f"Saved GeoPackage: {os.path.basename(gpkg_out)}")
+        except Exception as e:
+            logging.error(f"Failed to save GPKG: {e}")
 
+    # 3. Shapefile in UTM for Blender
+    if OUT_SHP:
+        try:
+            utm_crs     = gdf.estimate_utm_crs()
+            gdf_blender = gdf.to_crs(utm_crs)
+            # Shapefile field names are limited to 10 characters. The
+            # driver shortens longer names (and renames clashes) itself;
+            # one log line lists the changes instead of a warning per field.
+            long_names = [c for c in gdf_blender.columns
+                          if c != gdf_blender.geometry.name and len(c) > 10]
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                warnings.simplefilter("ignore", RuntimeWarning)
+                gdf_blender.to_file(blender_out)
+            logging.info(f"Saved Blender SHP: {os.path.basename(blender_out)} (Projected to {utm_crs.name})")
+            if long_names:
+                logging.info(
+                    f"  {len(long_names)} field names over 10 characters were shortened in the "
+                    f"shapefile (e.g. {long_names[0]}); the CSV and GeoPackage keep the full names.")
+        except Exception as e:
+            logging.error(f"Failed to save Blender shapefile: {e}")
+
+    logging.info(f"Finished State {label}.")
+
+
+def _local_state_label() -> str:
+    """State FIPS for a local input file: the single state in
+    STATES_TO_PROCESS, or "LOCAL" when it names none or several. The FIPS
+    drives the smoothing-factor lookup, the NBI/NTI selection and the
+    output names."""
+    if len(STATES_TO_PROCESS) == 1 and STATES_TO_PROCESS[0].upper() != "ALL":
+        return STATES_TO_PROCESS[0]
+    return "LOCAL"
 
 
 def main():
-    # REPLACE the argparse setup (lines 815-824) with this improved version:
-    parser = argparse.ArgumentParser(
-        description="RAT 4D Enrichment Pipeline",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Process with Unified GUI config
-  python hpms_4d_enricher_cli.py --params_json config.json --outdir output --demdir /dems
-  
-  # Process Nebraska from Socrata API
-  python hpms_4d_enricher_cli.py --outdir output --demdir /dems --state 31
-  
-  # Process from local CSV file
-  python hpms_4d_enricher_cli.py --input local_hpms.csv --outdir output --demdir /dems
-  
-  # With Socrata token (for high-volume requests)
-  python hpms_4d_enricher_cli.py --outdir output --demdir /dems --state ALL --socrata-token YOUR_TOKEN
-        """
-    )
-    parser.add_argument("--input",          default=None, 
-                        help="Path to local HPMS CSV file (overrides --state)")
-    parser.add_argument("--state",          default="31",
-                        help="State FIPS code or 'ALL' (default: 31, ignored if --input provided)")
-    parser.add_argument("--outdir",         required=True,
-                        help="Output directory for 4D enriched data")
-    parser.add_argument("--demdir",         required=True,
-                        help="Path to DEM cache directory")
-    parser.add_argument("--params_json",    default=None, 
-                        help="Path to run_params.json from Unified GUI (overrides other args)")
-    parser.add_argument("--socrata-token",  default="",
-                        help="Socrata API token (optional)")
-    parser.add_argument("--horizontal-csv", default=None,
-                        help="Path to RAT horizontal curve CSV for field replacement")
-    parser.add_argument("--vertical-csv",   default=None,
-                        help="Path to RAT vertical curve CSV for field replacement")
-    parser.add_argument("--debug", action="store_true",
-                        help="Enable debug-level logging for troubleshooting")
-    
-    args = parser.parse_args()
-    
-    # Set logging level based on --debug flag
-    if args.debug:
-        logging.basicConfig(level=logging.DEBUG, 
-                           format="%(asctime)s - %(levelname)s - %(funcName)s: %(message)s")
-        logging.debug("Debug logging enabled - verbose output mode")
-    else:
-        logging.basicConfig(level=logging.INFO, 
-                           format="%(asctime)s - %(levelname)s: %(message)s")
-    
-    # Now use args instead of global variables
+    import argparse
+
+    ap = argparse.ArgumentParser(description="RAT 4D Enricher CLI")
+    ap.add_argument("--input",          default=None, help="Path to local input file (optional)")
+    ap.add_argument("--outdir",         default=None, help="Output directory")
+    ap.add_argument("--demdir",         default=None, help="DEM cache directory")
+    ap.add_argument("--params_json",    default=None, help="Path to run_params.json from GUI")
+    ap.add_argument("--horizontal_csv", default=None, help="Path to RAT horizontal curve CSV for curve field replacement")
+    ap.add_argument("--grades_csv",     default=None, help="Path to RAT grade segment CSV for grade field replacement")
+    args = ap.parse_args()
+
     global OUTPUT_DIR, DEM_DIR, STATES_TO_PROCESS, FACILITY_TYPE_FILTER
     global FSYSTEM_FILTER, INCLUDE_ALL_HPMS_FIELDS, SELECTED_HPMS_FIELDS
-    global HORIZONTAL_CSV, VERTICAL_CSV
-    
-    # Define defaults
-    STATES_TO_PROCESS = ["31"]
-    
+    global FACILITY_TYPE_INCLUDE_MISSING, FSYSTEM_INCLUDE_MISSING
+    global HORIZONTAL_CSV, GRADES_CSV, SOCRATA_TOKEN, SOCRATA_URL, OUT_GPKG, OUT_SHP, RUN_PARAMS
+
     if args.params_json and os.path.exists(args.params_json):
-        # GUI invocation
         with open(args.params_json, "r", encoding="utf-8") as f:
             p = json.load(f)
-            global GLOBAL_PARAMS_JSON
-            GLOBAL_PARAMS_JSON = p    
-        OUTPUT_DIR             = args.outdir or p.get("OUTPUT_DIR", "")
-        DEM_DIR                = args.demdir or p.get("DEM_DIR", "")
+        RUN_PARAMS             = p
+        OUTPUT_DIR             = args.outdir  or p.get("OUTPUT_DIR", OUTPUT_DIR)
+        DEM_DIR                = args.demdir  or p.get("DEM_DIR",    DEM_DIR)
         FACILITY_TYPE_FILTER   = p.get("FACILITY_TYPE_FILTER", FACILITY_TYPE_FILTER)
         FSYSTEM_FILTER         = p.get("FSYSTEM_FILTER",       FSYSTEM_FILTER)
+        FACILITY_TYPE_INCLUDE_MISSING = bool(p.get("FACILITY_TYPE_INCLUDE_MISSING",
+                                                   FACILITY_TYPE_INCLUDE_MISSING))
+        FSYSTEM_INCLUDE_MISSING       = bool(p.get("FSYSTEM_INCLUDE_MISSING",
+                                                   FSYSTEM_INCLUDE_MISSING))
         gui_fields = p.get("INCLUDE_HPMS_FIELDS", "NOT_SET")
         if gui_fields != "NOT_SET":
             INCLUDE_ALL_HPMS_FIELDS = (gui_fields is None)
             SELECTED_HPMS_FIELDS    = gui_fields
-        state_fips = str(p.get("STATE_FIPS", "")).zfill(2)
-        STATES_TO_PROCESS = [state_fips] if state_fips and state_fips != "00" else STATES_TO_PROCESS
+        SOCRATA_TOKEN          = p.get("SOCRATA_TOKEN") or SOCRATA_TOKEN
+        SOCRATA_URL            = p.get("INPUT_URL") or SOCRATA_URL
+        OUT_GPKG               = bool(p.get("OUT_GPKG", OUT_GPKG))
+        OUT_SHP                = bool(p.get("OUT_SHP", OUT_SHP))
+        # From the GUI, a blank State FIPS (or ALL) means every state.
+        state_fips = str(p.get("STATE_FIPS", "")).strip().upper().zfill(2)
+        STATES_TO_PROCESS = ["ALL"] if state_fips in ("00", "ALL") else [state_fips]
     else:
-        # CLI invocation
-        OUTPUT_DIR = args.outdir
-        DEM_DIR = args.demdir
-        if args.state and args.state.upper() == "ALL":
-            STATES_TO_PROCESS = ALL_FIPS
-        else:
-            STATES_TO_PROCESS = [str(args.state).zfill(2)]
-    
-    # Validate required directories
+        if args.outdir:  OUTPUT_DIR = args.outdir
+        if args.demdir:  DEM_DIR    = args.demdir
+
+    # Command-line paths take precedence over the CONFIGURATION block.
+    if args.horizontal_csv: HORIZONTAL_CSV = args.horizontal_csv
+    if args.grades_csv:     GRADES_CSV     = args.grades_csv
+
     if not OUTPUT_DIR:
-        logging.error("--outdir is required")
+        logging.error("OUTPUT_DIR is not set. Provide --outdir or set OUTPUT_DIR in the config block.")
         raise SystemExit(1)
     if not DEM_DIR:
-        logging.error("--demdir is required")
+        logging.error("DEM_DIR is not set. Provide --demdir or set DEM_DIR in the config block.")
         raise SystemExit(1)
-    
+
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    os.makedirs(DEM_DIR, exist_ok=True)
-    
-    # Process input
-    if args.input:
-        logging.info(f"Processing local file: {args.input}")
-        df = load_local_hpms(args.input)
-        display_fips = STATES_TO_PROCESS[0] if len(STATES_TO_PROCESS) == 1 else None
-        run_state_enrichment("LOCAL", local_df=df, display_fips=display_fips)
-    else:
-        for state in STATES_TO_PROCESS:
-            run_state_enrichment(state)
-    
+    os.makedirs(DEM_DIR,    exist_ok=True)
+
+    try:
+        if args.input:
+            logging.info(f"Processing local file: {args.input}")
+            df = load_local_hpms(args.input)
+            resolved_fips = _local_state_label()
+            run_state_enrichment(resolved_fips, local_df=df, display_fips=resolved_fips)
+        elif STATES_TO_PROCESS:
+            states = ALL_FIPS if "ALL" in [s.upper() for s in STATES_TO_PROCESS] else STATES_TO_PROCESS
+            for state in states:
+                run_state_enrichment(state)
+        elif LOCAL_FILE_PATH:
+            logging.info(f"Processing local file: {LOCAL_FILE_PATH}")
+            df = load_local_hpms(LOCAL_FILE_PATH)
+            resolved_fips = _local_state_label()
+            run_state_enrichment(resolved_fips, local_df=df, display_fips=resolved_fips)
+        else:
+            logging.error("No input specified. Set STATES_TO_PROCESS or LOCAL_FILE_PATH in the config block.")
+            raise SystemExit(1)
+
+    except DemCacheUnavailable as e:
+        # One message instead of one per task. Nothing is written for the
+        # state that was running; states already finished keep their files.
+        logging.error(
+            f"{e} The run was stopped and no outputs were written for the state in progress. "
+            f"Check the connection to the DEM folder (or use a folder on a local drive) and run it again."
+        )
+        raise SystemExit(1)
+
+
 if __name__ == "__main__":
     main()
