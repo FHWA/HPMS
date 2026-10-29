@@ -34,7 +34,7 @@ the smoothed pipeline are filled this way. The Elevation_Source column
 reads "smoothed" or "raw_fallback" so the two can be told apart.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-CREATED ON: 5/14/2026
+VERSION: 3.3, October 29, 2026
 """
 import os
 import sys

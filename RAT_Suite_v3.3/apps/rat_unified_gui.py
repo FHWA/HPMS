@@ -22,6 +22,9 @@ Provides a Tkinter-based interface for users to configure alignment, plan/profil
 and 4D enrichment parameters. It does not perform mathematical processing; instead,
 it collects inputs, packages them into a JSON payload, and uses the subprocess
 module to safely execute the suite's CLI scripts in isolated memory environments.
+
+CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
+VERSION: 3.3, October 29, 2026
 """
 
 import os

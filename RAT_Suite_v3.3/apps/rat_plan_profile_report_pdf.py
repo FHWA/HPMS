@@ -33,7 +33,7 @@ plan-view relief come from the cached 1 m DEM tiles, and cross-section
 sheets from the *_cross_sections.csv files, when present.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-CREATED ON: 5/14/2026
+VERSION: 3.3, October 29, 2026
 """
 import os
 import sys

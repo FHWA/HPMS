@@ -28,6 +28,9 @@ pieces for parallel processing, and each piece reports only the curves,
 grades and vertices within its own milepost range, so no two pieces report
 the same output. Elevations come from the USGS 3DEP 1 m DEM, cached in
 align_1m_cache under the DEM directory.
+
+CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
+VERSION: 3.3, October 29, 2026
 """
 import os
 import glob
