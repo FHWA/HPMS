@@ -306,7 +306,7 @@ The Structure Span Report lists each span with its reference point limits, lengt
 | Flag | Where | Meaning |
 | :--- | :--- | :--- |
 | `False_Valley_Warning` | Vertical curves | A sag curve lies on a bridge span. It may be real (a bridge in a valley) or a sign that the span was not fully repaired. Check the profile sheet. |
-| `Line_Off_Road` | Plan/Profile tables and cross sections | Two or more cross sections in a row find no pavement at the HPMS line, and the road centerline far from it. The line probably follows an old alignment. Curves and grades there describe the ground beside the road; check the line against current imagery. The log gives the reference point range and the PDF marks the stretch "LINE OFF ROAD?". |
+| `Line_Off_Road` | Plan/Profile tables and cross sections | Two or more cross sections in a row find no pavement at the HPMS line, and the road centerline far from it. The line probably follows an old alignment, or the road was rebuilt on a new alignment after the elevation data were collected (as on I-80 at Council Bluffs, Iowa). Curves and grades there describe the ground in the elevation model, not the road; check the line against current imagery. The log gives the reference point range and the PDF marks the stretch "LINE OFF ROAD?". |
 | Unknown Clearance | Intersections | Two routes cross with 5–10 ft of elevation difference: not clearly at grade or grade-separated. |
 | Sight distance under 400 ft | Plan/Profile sheets and dashboards | Points where available sight distance is under a fixed 400 ft. |
 
