@@ -107,7 +107,9 @@ from the other roadway (on a divided road whose two HPMS lines both follow
 an old alignment, the centerline lands midway between them at the usual
 offset), and the ground along the HPMS line there is rough (below), the
 line is taken to be off the roadway (Line_Off_Road), typically an old
-alignment where the DEM shows new construction. Roughness is the ground's
+alignment where the DEM shows new construction, or a road rebuilt on a new
+alignment after the DEM's lidar was collected (the line is right, but the
+DEM shows the earlier ground). Roughness is the ground's
 departure from its own running median over _OFF_ROAD_ROUGH_WINDOW_FT, read
 along the HPMS line (the vertices' Elev_Raw_Ft), leaving out bridges and
 tunnels backed by an HPMS or NBI/NTI record and
@@ -194,11 +196,12 @@ _FORESLOPE_STEEP_SLOPE = 0.10   # first face at least this steep (10:1) is the f
 _HEADING_HALF_FT = 25.0
 _TURN_HALF_FT = 100.0
 _MIN_STATION_GAP_FT = 50.0
-# The HPMS line is taken to be off the road (old alignment, new construction
-# in the DEM) where two or more stations in a row show both: the centerline
-# this far beyond the route's typical offset from the line, and no
-# inventory lanes at the line (none fitted, or sloping more than
-# _OFF_ROAD_SLOPE_PCT, steeper than normal superelevation).
+# The HPMS line is taken to be off the road (old alignment with new
+# construction in the DEM, or new construction not yet in the DEM) where
+# two or more stations in a row show both: the centerline this far beyond
+# the route's typical offset from the line, and no inventory lanes at the
+# line (none fitted, or sloping more than _OFF_ROAD_SLOPE_PCT, steeper than
+# normal superelevation).
 _OFF_ROAD_OFFSET_FT = 25.0
 _OFF_ROAD_SLOPE_PCT = 8.0
 _OFF_ROAD_MIN_STATIONS = 2
@@ -206,8 +209,9 @@ _OFF_ROAD_MIN_STATIONS = 2
 # run. Departure of the DEM along the line from its own running median over
 # _OFF_ROAD_ROUGH_WINDOW_FT, its median taken over each _OFF_ROAD_ROUGH_SPAN_FT
 # stretch. On pavement the roughest stretch measured 0.11 ft (urban DC),
-# usually under 0.05 ft; the line across the old I-80 alignment at Council
-# Bluffs, Iowa measured 0.27-0.38 ft.
+# usually under 0.05 ft; the 2024 I-80 line at Council Bluffs, Iowa, over
+# ground the 2020-21 DEM shows before the new eastbound lanes were built,
+# measured 0.27-0.38 ft.
 _OFF_ROAD_ROUGH_FT = 0.2
 _OFF_ROAD_ROUGH_WINDOW_FT = 50.0
 _OFF_ROAD_ROUGH_SPAN_FT = 300.0
@@ -1495,7 +1499,8 @@ def flag_line_off_road(stations: pd.DataFrame,
                        ground: Optional[Tuple[np.ndarray, np.ndarray]] = None) -> np.ndarray:
     """
     True at stations where the HPMS line appears to lie off the roadway,
-    typically an old alignment where the DEM shows new construction: in a
+    typically an old alignment where the DEM shows new construction, or a
+    road rebuilt after the DEM's lidar was collected: in a
     run of at least _OFF_ROAD_MIN_STATIONS stations, no inventory lanes are
     found at the line (or they slope more than _OFF_ROAD_SLOPE_PCT, see
     _lane_cross_slope) and either the centerline is more than
