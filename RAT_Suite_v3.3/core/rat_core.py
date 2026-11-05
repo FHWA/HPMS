@@ -25,7 +25,7 @@ calculus-based curvature analysis (kappa), and KDTree spatial indexing for
 4D geometry generation.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, October 29, 2026
+VERSION: 3.3, November 5, 2026
 """
 from typing import Dict, List, Tuple, Optional
 import math
@@ -104,6 +104,10 @@ VC_CLASS_MIN_SPEED_MPH = {"A": 70, "B": 60, "C": 50, "D": 40, "E": 30}
 # Reference speed by functional system where the HPMS record carries no
 # speed limit. Used only for the Meets_Speed_Ref comparison.
 DEFAULT_SPEED_BY_FS_MPH = {1: 75, 2: 65, 3: 55, 4: 45, 5: 35, 6: 30, 7: 25}
+# Plan and profile sheets and dashboards mark points whose available sight
+# distance is under this (ft) when no speed is entered for the run. With a
+# speed entered, the mark is the stopping sight distance for that speed.
+SIGHT_WARNING_FT = 400.0
 # ===========================================================================
 
 SOCRATA_DEFAULT = "https://datahub.transportation.gov/resource/42um-tgh5.json"
@@ -1139,11 +1143,14 @@ def apply_facility_fsystem_filters(
     fsystem_filter: list = None,
     include_missing_facility: bool = False,
     include_missing_fsystem: bool = False,
+    county_fips: str = None,
+    ownership_filter: list = None,
+    include_missing_ownership: bool = False,
 ) -> pd.DataFrame:
     """
-    Applies the standard Facility_Type / FSystem allow-list filters to an
-    already-loaded HPMS dataframe (e.g. from load_local_hpms(), or a
-    Socrata extract that was downloaded without server-side filtering).
+    Applies the standard record filters to an already-loaded HPMS dataframe
+    (e.g. from load_local_hpms(), or a saved Socrata extract): facility
+    type, functional system, county and ownership.
 
     The same filtering fetch_socrata_state() applies in its $where clause,
     for local or cached dataframes. An empty or None facility type list
@@ -1151,6 +1158,12 @@ def apply_facility_fsystem_filters(
     system list keeps every coded class. Records with no facility type / no functional system
     (Facility_Type_Missing / FSystem_Missing) are kept only with
     include_missing_facility / include_missing_fsystem.
+
+    county_fips (three digits, see normalize_county_fips) keeps the records
+    of that county only. A non-empty ownership_filter keeps the records
+    with those Ownership codes, and those with no ownership when
+    include_missing_ownership is True; an empty or None list keeps every
+    record.
     """
     before = len(df)
 
@@ -1165,12 +1178,120 @@ def apply_facility_fsystem_filters(
     if "FSystem" in df.columns:
         df = df[_keep("FSystem", fsystem_filter, include_missing_fsystem)]
 
+    if county_fips:
+        county = int(county_fips)
+        if "County_ID" not in df.columns or pd.to_numeric(df["County_ID"], errors="coerce").isna().all():
+            logging.warning(f"The HPMS data has no county codes, so no records match county {county_fips}.")
+        df = df[_county_codes(df.get("County_ID", pd.Series(np.nan, index=df.index))) == county]
+
+    if ownership_filter:
+        owner = pd.to_numeric(df.get("Ownership", pd.Series(np.nan, index=df.index)), errors="coerce")
+        keep = owner.isin([int(v) for v in ownership_filter])
+        if include_missing_ownership:
+            keep |= owner.isna()
+        df = df[keep]
+
     after = len(df)
     if after != before:
         logging.info(
-            f"Facility Type / FSystem filter: {before:,} -> {after:,} rows."
+            f"Record filters ({describe_record_filters(facility_filter, fsystem_filter, county_fips, ownership_filter, include_missing_ownership)}): "
+            f"{before:,} -> {after:,} rows."
         )
     return df
+
+
+# HPMS Ownership codes (Item 6, HPMS Field Manual), for the Ownership filter.
+OWNERSHIP_CODES = {
+    1: "State Highway Agency",
+    2: "County Highway Agency",
+    3: "Town or Township Highway Agency",
+    4: "City or Municipal Highway Agency",
+    11: "State Park, Forest, or Reservation Agency",
+    12: "Local Park, Forest, or Reservation Agency",
+    21: "Other State Agency",
+    25: "Other Local Agency",
+    26: "Private (other than Railroad)",
+    27: "Railroad",
+    31: "State Toll Authority",
+    32: "Local Toll Authority",
+    40: "Other Public Instrumentality (e.g., Airport, School, University)",
+    50: "Indian Tribe Nation",
+    60: "Other Federal Agency",
+    62: "Bureau of Indian Affairs",
+    63: "Bureau of Fish and Wildlife",
+    64: "U.S. Forest Service",
+    66: "National Park Service",
+    67: "Tennessee Valley Authority",
+    68: "Bureau of Land Management",
+    69: "Bureau of Reclamation",
+    70: "Corps of Engineers",
+    72: "Air Force",
+    73: "Navy/Marines",
+    74: "Army",
+    80: "Other",
+}
+
+
+def normalize_county_fips(value, state_fips: str = None) -> Optional[str]:
+    """
+    The three-digit county FIPS code entered for a run, or None for a
+    whole-State run (blank). Accepts 1 to 3 digits ("33", "033") or the
+    five-digit State and county code ("53033"), whose first two digits must
+    be the run's State. Raises ValueError for anything else.
+    """
+    raw = "" if value is None else str(value).strip()
+    if raw == "" or raw.lower() in ("none", "nan"):
+        return None
+    if not raw.isdigit():
+        raise ValueError(f'County FIPS "{raw}" is not a number.')
+    if len(raw) == 5:
+        state = str(state_fips or "").strip()
+        if state.isdigit() and raw[:2] != state.zfill(2):
+            raise ValueError(f"County FIPS {raw} is not in State {state.zfill(2)}.")
+        raw = raw[2:]
+    elif len(raw) > 3:
+        raise ValueError(f'County FIPS "{raw}" must have 3 digits (or 5 with the State).')
+    if int(raw) == 0:
+        raise ValueError("County FIPS 000 is not a county.")
+    return raw.zfill(3)
+
+
+def _county_codes(series: pd.Series) -> pd.Series:
+    """County_ID as a three-digit county number; five-digit State and
+    county codes are reduced to the county part."""
+    codes = pd.to_numeric(series, errors="coerce")
+    return codes.where(codes < 1000, codes % 1000)
+
+
+def run_label(state_fips: str, county_fips: str = None) -> str:
+    """Label of a run's output folder (Output_State_<label>) and file
+    names: the State FIPS, or "<State>_County_<county>" for a county run."""
+    return f"{state_fips}_County_{county_fips}" if county_fips else str(state_fips)
+
+
+def record_filter_args(p: dict) -> dict:
+    """The county and ownership filters of a run's parameters (COUNTY_FIPS,
+    OWNERSHIP_FILTER, OWNERSHIP_INCLUDE_MISSING), as keyword arguments for
+    fetch_socrata_state() and apply_facility_fsystem_filters()."""
+    return {
+        "county_fips": normalize_county_fips(p.get("COUNTY_FIPS"), p.get("STATE_FIPS")),
+        "ownership_filter": [int(v) for v in (p.get("OWNERSHIP_FILTER") or [])],
+        "include_missing_ownership": bool(p.get("OWNERSHIP_INCLUDE_MISSING", False)),
+    }
+
+
+def describe_record_filters(facility_filter=None, fsystem_filter=None, county_fips=None,
+                            ownership_filter=None, include_missing_ownership=False) -> str:
+    """One line describing a run's record filters, for the Run Log."""
+    parts = [f"facility types {', '.join(str(v) for v in (facility_filter or [1, 2]))}",
+             f"functional classes {', '.join(str(v) for v in fsystem_filter)}" if fsystem_filter
+             else "all functional classes"]
+    if county_fips:
+        parts.append(f"county {county_fips}")
+    if ownership_filter:
+        owners = ", ".join(str(v) for v in ownership_filter)
+        parts.append(f"ownership {owners}" + (" and blank" if include_missing_ownership else ""))
+    return "; ".join(parts)
 
 
 # ===========================================================================
@@ -1394,6 +1515,9 @@ def fetch_socrata_state(
     url: str = None,
     include_missing_facility: bool = False,
     include_missing_fsystem: bool = False,
+    county_fips: str = None,
+    ownership_filter: list = None,
+    include_missing_ownership: bool = False,
 ) -> pd.DataFrame:
     """
     Downloads HPMS records for a single state from Socrata, with the
@@ -1415,6 +1539,10 @@ def fetch_socrata_state(
     with no facility type / no functional system (see normalize_fsystem).
     With no functional system filter, every coded functional system is
     returned.
+
+    county_fips and ownership_filter limit the records to one county and to
+    the listed owners (socrata_area_clauses); see
+    apply_facility_fsystem_filters for their meaning.
     """
     ft = facility_type_filter or [1, 2]
     ft_parts = ["facility_type IN (" + ", ".join(f"'{v}'" for v in ft) + ")"]
@@ -1432,17 +1560,39 @@ def fetch_socrata_state(
     else:
         fs_clause = "" if include_missing_fsystem else "AND f_system IS NOT NULL"
 
-    where_clause = f"stateid='{state_fips}' {ft_clause} {fs_clause}".strip()
+    area = " ".join(f"AND {c}" for c in socrata_area_clauses(
+        state_fips, county_fips, ownership_filter, include_missing_ownership))
+    where_clause = f"stateid='{state_fips}' {ft_clause} {fs_clause} {area}".strip()
     # Paging with $offset needs an explicit $order for a stable row order.
     # ShapeId follows each state's submission (digitization) order, which
     # is the order stitch_linestrings_by_shapeid() expects.
     params = {"$limit": 100_000, "$offset": 0, "$where": where_clause, "$order": "shapeid"}
 
-    logging.info(f"Fetching Socrata data for State FIPS {state_fips}...")
+    where = f"State FIPS {state_fips}" + (f", county {county_fips}" if county_fips else "")
+    logging.info(f"Fetching Socrata data for {where}...")
     rows = _socrata_rows(url or SOCRATA_DEFAULT, token, params, progress_callback)
     if not rows:
-        raise ValueError(f"No records found for State {state_fips}.")
+        raise ValueError(f"No records found for {where}.")
     return _socrata_frame(rows)
+
+
+def socrata_area_clauses(state_fips: str, county_fips: str = None, ownership_filter: list = None,
+                         include_missing_ownership: bool = False) -> list:
+    """$where conditions for a county and a list of owners. The county is
+    matched as written with and without leading zeros and with the State
+    prefix, so it is found whether the portal stores county_id as text or
+    as a number."""
+    clauses = []
+    if county_fips:
+        c = str(county_fips).zfill(3)
+        forms = [c, str(int(c)), f"{str(state_fips).zfill(2)}{c}"]
+        clauses.append("county_id IN (" + ", ".join(f"'{v}'" for v in dict.fromkeys(forms)) + ")")
+    if ownership_filter:
+        parts = ["ownership IN (" + ", ".join(f"'{int(v)}'" for v in ownership_filter) + ")"]
+        if include_missing_ownership:
+            parts.append("ownership IS NULL")
+        clauses.append("(" + " OR ".join(parts) + ")")
+    return clauses
 
 
 def fetch_socrata_nearby(
@@ -1670,6 +1820,7 @@ def _socrata_frame(rows: list) -> pd.DataFrame:
         "structure_type": "Structure_Type",
         "shapeid":     "ShapeId",
         "county_id":   "County_ID",
+        "ownership":   "Ownership",
     }
     df.rename(columns=col_map, inplace=True)
 
@@ -1689,6 +1840,7 @@ def _socrata_frame(rows: list) -> pd.DataFrame:
         )
         df["ShapeId"] = np.nan
     if "County_ID" not in df.columns: df["County_ID"] = None
+    if "Ownership" not in df.columns: df["Ownership"] = np.nan
 
     df["Start_MP"] = pd.to_numeric(df["Start_MP"], errors="coerce").fillna(0.0)
     df["End_MP"]   = pd.to_numeric(df["End_MP"],   errors="coerce").fillna(0.0)
@@ -1771,6 +1923,7 @@ def load_local_hpms(path: str) -> pd.DataFrame:
         elif c in ["structure_type", "structuretype", "struct_typ"]: col_map[col] = "Structure_Type"
         elif c in ["shapeid", "shape_id"]: col_map[col] = "ShapeId"
         elif c in ["county_id", "countyid", "county"]: col_map[col] = "County_ID"
+        elif c in ["ownership", "owner"]: col_map[col] = "Ownership"
     df.rename(columns=col_map, inplace=True)
 
     if "RouteId" not in df.columns: raise ValueError("Missing RouteId column.")
@@ -1795,6 +1948,7 @@ def load_local_hpms(path: str) -> pd.DataFrame:
         )
         df["ShapeId"] = np.nan
     if "County_ID" not in df.columns: df["County_ID"] = None
+    if "Ownership" not in df.columns: df["Ownership"] = np.nan
 
     df["RouteId"] = df["RouteId"].astype(str).str.strip().str.upper()
     df["Start_MP"] = pd.to_numeric(df["Start_MP"], errors="coerce").fillna(0.0)
@@ -2032,6 +2186,10 @@ def fetch_nbi_nti_state(state_fips: str, bbox: tuple = None) -> gpd.GeoDataFrame
 # Download 1 meter USGS DEMs
 # -------------------------
 HIGH_RES_TILE_PIXELS = 2400
+# Tiles downloaded at once when a run fetches the tiles it needs before
+# processing (ensure_dem_cells_cached). USGS throttling pauses all of them
+# together (see USGS_THROTTLE_* below).
+DEM_DOWNLOAD_THREADS = 6
 HIGH_RES_CELL_SIZE_DEG = 0.025
 
 
@@ -2269,22 +2427,31 @@ def ensure_dem_cells_cached(geometries, cache_dir: str, log_label: str = None,
 
     # A state can need tens of thousands of tiles (Nebraska 17,752), so
     # downloads run in threads with periodic progress messages.
+    # A lost DEM folder stops the download (DemCacheUnavailable): the tiles
+    # not yet started are cancelled and the error passes to the caller.
     from concurrent.futures import ThreadPoolExecutor, as_completed
     cells = sorted(needed_cells)
     n_cells = len(cells)
     n_done = 0
-    with ThreadPoolExecutor(max_workers=6) as ex:
+    ex = ThreadPoolExecutor(max_workers=DEM_DOWNLOAD_THREADS)
+    try:
         futures = {ex.submit(download_dem_cell, lon_idx, lat_idx, cache_dir): (lon_idx, lat_idx)
                    for lon_idx, lat_idx in cells}
         for fut in as_completed(futures):
             lon_idx, lat_idx = futures[fut]
             try:
                 fut.result()
+            except DemCacheUnavailable:
+                raise
             except Exception as e:
                 logging.warning(f"DEM tile ({lon_idx},{lat_idx}) failed to download: {e}")
             n_done += 1
             if log_label and (n_done % 200 == 0 or n_done == n_cells):
-                logging.info(f"  ...downloaded {n_done:,}/{n_cells:,} DEM tiles for {log_label}")
+                logging.info(f"  ...{n_done:,} of {n_cells:,} DEM tiles checked for {log_label}")
+    except BaseException:
+        ex.shutdown(wait=True, cancel_futures=True)
+        raise
+    ex.shutdown(wait=True)
     return cache_dir
 
 
@@ -3899,6 +4066,18 @@ def design_speed_supported(ssd_ft: float) -> int:
     return supported
 
 
+def stopping_sight_distance_ft(speed_mph: float) -> float:
+    """AASHTO stopping sight distance (ft) for a speed, from SSD_TABLE_FT,
+    interpolated between table speeds. Raises ValueError outside the
+    table's range."""
+    speeds = sorted(SSD_TABLE_FT)
+    s = float(speed_mph)
+    if not speeds[0] <= s <= speeds[-1]:
+        raise ValueError(f"Speed {s:g} mph is outside the AASHTO table "
+                         f"({speeds[0]} to {speeds[-1]} mph).")
+    return float(np.interp(s, speeds, [SSD_TABLE_FT[v] for v in speeds]))
+
+
 def vertical_curve_class(speed_mph: float) -> str:
     """Vertical curve class A-F from the design speed supported."""
     for cls in "ABCDE":
@@ -3965,15 +4144,24 @@ def _speed_limit_column(df: pd.DataFrame) -> Optional[str]:
     return None
 
 
-def add_speed_reference(curves: List[Dict], hpms_sub: Optional[pd.DataFrame], f_sys: int) -> None:
+def add_speed_reference(curves: List[Dict], hpms_sub: Optional[pd.DataFrame], f_sys: int,
+                        speed_mph: Optional[float] = None) -> None:
     """
     Adds Speed_Ref_Mph, Speed_Ref_Source and Meets_Speed_Ref to each
     vertical curve (Calibrated_Start_MP / Calibrated_End_MP and
-    Design_Speed_Supported_Mph already set). The reference is the HPMS
-    speed limit of the record containing the curve's midpoint, when
-    reported (not 999); otherwise DEFAULT_SPEED_BY_FS_MPH for the record's
-    functional system (f_sys where no record matches).
+    Design_Speed_Supported_Mph already set). With speed_mph (a speed the
+    user entered for a plan and profile run), every curve takes that speed
+    ("User entry"). Otherwise the reference is the HPMS speed limit of the
+    record containing the curve's midpoint, when reported (not 999); else
+    DEFAULT_SPEED_BY_FS_MPH for the record's functional system (f_sys where
+    no record matches).
     """
+    if speed_mph is not None:
+        for c in curves:
+            c["Speed_Ref_Mph"] = float(speed_mph)
+            c["Speed_Ref_Source"] = "User entry"
+            c["Meets_Speed_Ref"] = bool(c["Design_Speed_Supported_Mph"] >= speed_mph)
+        return
     starts = ends = speeds = fsys = None
     if hpms_sub is not None and not hpms_sub.empty:
         starts = pd.to_numeric(hpms_sub["Start_MP"], errors="coerce").to_numpy()
