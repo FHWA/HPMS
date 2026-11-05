@@ -92,6 +92,8 @@ The suite is packaged with `pyproject.toml` and requires **Python 3.10 or later*
 * **Socrata URL (default):** the HPMS dataset on the U.S. DOT data portal, `https://datahub.transportation.gov/resource/42um-tgh5.json`. Enter a two-digit **State FIPS** code, or leave it blank (or enter ALL) to run every State. A free Socrata app token is optional but reduces throttling on large downloads. Scripts run outside the GUI read the token from the `RAT_SOCRATA_TOKEN` environment variable.
 * **Local file:** a `.csv`, `.shp`, or `.geojson` with a `RouteId` column and line geometry (WKT for CSV).
 * **Functional System / Facility Type filters** limit which roads are processed.
+* **County FIPS** (optional, e.g. `033`) limits a one-State run to one county; results go to `Output_State_XX_County_CCC`, with the same label in the file names. Routes that cross the county line are cut at the line.
+* **Ownership** opens a list of HPMS ownership codes with check boxes (for example, 2: County Highway Agency) to process only roads with those owners; **Missing** adds records with no ownership. Default: all owners.
 
 ### 3. Directories
 * **Output Directory:** where results are written.
@@ -99,7 +101,7 @@ The suite is packaged with `pyproject.toml` and requires **Python 3.10 or later*
 
 ### 4. Modes
 * **Run Alignment:** statewide curve tables, map, and dashboard.
-* **Run Plan/Profile:** one route, chosen with **Plan/Profile Route ID** and optional **Begin/End RP**. Click **Load Routes** for the State's route list, then type any part of the Route ID; the matching routes are listed below the field and narrow as you type. Click one (or press Enter for the first, or the down arrow to move into the list).
+* **Run Plan/Profile:** one route, chosen with **Plan/Profile Route ID** and optional **Begin/End RP**. Click **Load Routes** for the State's route list, then type any part of the Route ID; the matching routes are listed below the field and narrow as you type. Click one (or press Enter for the first, or the down arrow to move into the list). **Speed Limit (mph)** is optional; see the speed comparison below.
 * **Run 4D Enrichment:** 3D/4D HPMS linework.
 
 ### 5. Output formats
@@ -119,7 +121,7 @@ Every A–F scale in the suite runs from A (mildest) to F (most severe).
 * **Horizontal curves** (`Bin`) are classed by degree of curve, using the HPMS curve class thresholds.
 * **Grade segments** (`alignment_grades_*.csv`, `{base}_grades.csv`) are the pieces of road between the vertical points of intersection (VPIs) of the detected vertical curves, plus the chunk ends. Each has a signed grade (`Grade_Pct`, positive rising in the direction of increasing reference point) and an HPMS Item 45 class (`Grade_Bin`: A under 0.5%, B 0.5–2.4, C 2.5–4.4, D 4.5–6.4, E 6.5–8.4, F 8.5 or more). The segments cover each chunk with no gaps or overlaps.
 * **Vertical curves** (`VC_Class`) are classed by the highest design speed their stopping sight distance supports (AASHTO, *A Policy on Geometric Design of Highways and Streets*, 7th Edition, 2018, Table 3-1; 3.5 ft eye and 2.0 ft object over crests, 2.0 ft headlights with a 1° beam on sags): A 70 mph or more, B 60–65, C 50–55, D 40–45, E 30–35, F 25 or less. The table also gives `SSD_Provided_Ft` (blank where the curve does not limit sight distance), `Design_Speed_Supported_Mph`, and `K_Value` in feet per percent of grade change.
-* **Speed comparison.** `Speed_Ref_Mph` is the HPMS speed limit of the section containing the curve's midpoint, or a default by functional class where none is reported (FS1 75, FS2 65, FS3 55, FS4 45, FS5 35, FS6 30, FS7 25 mph; `DEFAULT_SPEED_BY_FS_MPH` in `core/rat_core.py`). `Meets_Speed_Ref` is True when the supported design speed is at least that speed. The comparison never changes the class.
+* **Speed comparison.** `Speed_Ref_Mph` is the HPMS speed limit of the section containing the curve's midpoint, or a default by functional class where none is reported (FS1 75, FS2 65, FS3 55, FS4 45, FS5 35, FS6 30, FS7 25 mph; `DEFAULT_SPEED_BY_FS_MPH` in `core/rat_core.py`). `Meets_Speed_Ref` is True when the supported design speed is at least that speed. The comparison never changes the class. For a Plan/Profile run, a speed limit can be entered in the GUI (**Speed Limit (mph)**, 15–80 mph, optional); every curve in the run is then compared with it (`Speed_Ref_Source` = User entry), and the sheets and dashboard mark points where the available sight distance is under the AASHTO stopping sight distance for that speed instead of the fixed 400 ft. The alignment and 4D Enrichment runs always use the HPMS speed limit or the default.
 * **Vertices** carry `V_Grade_Bin` and `Seg_Grade_Pct` (the grade segment containing the point) and `V_Curve_Class` (A on tangents).
 * **Section scores** give each HPMS section the class covering most of its length (`H_Curve_Bin`, `V_Grade_Bin`). With **Replace HPMS curve/grade classifications** checked, the 4D Enricher replaces the HPMS CURVES_A–F values with lengths from the horizontal curve table and GRADES_A–F with lengths from the grades table, in the same fields; each set adds up to the section length.
 

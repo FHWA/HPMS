@@ -34,9 +34,13 @@ Where the DEM edges miss a bridge, a span is built from the HPMS bridge record's
 
 The structure span list is built from the vertices, one row for each unbroken run of points on a bridge or tunnel. Two spans that meet end to end are therefore listed as one. Example: Glenbridge Avenue in Providence (route 40057520A), where two bridges about 100 ft apart, each with its own HPMS record, are drawn as two deck lines meeting at MP 0.288 but listed as one 459 ft span. List each span separately, carrying the span limits from the profile step instead of reading them back from the vertices.
 
-### Sight distance warning tied to design speed
+### Sight distance warning by section speed
 
-The plan/profile sheets and dashboards flag available sight distance under a fixed 400 ft. Compare it instead with the stopping sight distance for the section's speed (`Speed_Ref_Mph`).
+A plan/profile run can take one speed limit for the whole run (**Speed Limit (mph)** in the GUI); the sheets and dashboard then flag available sight distance under the AASHTO stopping sight distance for that speed, and otherwise under a fixed 400 ft. Allow a speed limit for each part of the route (for example, a table of reference point ranges and speeds), and use `Speed_Ref_Mph` for the warning in alignment runs.
+
+### Lines off the road on two-lane roads
+
+The plan/profile off-road flag (`Line_Off_Road`) needs the centerline to fall well away from its usual offset, or a divided-road centerline method, before a station counts; on a two-lane road the centerline is placed within about 15 ft of the line, so a line on the hillside beside the road is not flagged when the ground there is smooth. Seen on two forest roads in Idaho (lanes found at about 5% of stations) and on Snohomish County, Washington, route 700002800I at RP 11.84-11.97, where the line cuts the inside of a curve on a hillside about 30 ft above the road; the cross sections there found no lanes at the line and, at one, a flat strip at road level 110-130 ft to the side. A test for a line on steep ground with no road strip beside it caught the Idaho cases but also flagged about 9 miles of the Seward Highway, where the DEM is coarse. Find a test that separates these, for example a road-level strip beside the line that lines up with the profile on either side of the stretch.
 
 ### Elevation source resolution
 
