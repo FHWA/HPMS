@@ -34,7 +34,7 @@ the smoothed pipeline are filled this way. The Elevation_Source column
 reads "smoothed" or "raw_fallback" so the two can be told apart.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, October 29, 2026
+VERSION: 3.3, November 5, 2026
 """
 import os
 import sys
@@ -48,7 +48,7 @@ import pandas as pd
 import geopandas as gpd
 from shapely.wkt import loads
 from shapely.geometry import shape, LineString
-from pyproj import Transformer
+from pyproj import CRS, Transformer
 from concurrent.futures import ProcessPoolExecutor
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -57,6 +57,8 @@ if RAT_SUITE_DIR not in sys.path:
     sys.path.insert(0, RAT_SUITE_DIR)
 
 from core.rat_core import (
+    record_filter_args,
+    run_label,
     build_params,
     build_route_continuity_chunks,
     route_spans_several_fsystems,
@@ -116,6 +118,16 @@ FSYSTEM_FILTER       = []     # Empty list = all functional systems
 # keeps them blank, as submitted.
 FACILITY_TYPE_INCLUDE_MISSING = False
 FSYSTEM_INCLUDE_MISSING       = False
+
+# County and ownership filters. COUNTY_FIPS (three digits, e.g. "033";
+# blank = the whole State) needs a single State in STATES_TO_PROCESS; a
+# county run writes to Output_State_<State>_County_<county>.
+# OWNERSHIP_FILTER lists HPMS Ownership codes (e.g. [2] = County Highway
+# Agency; empty list = every record). Records with no ownership are kept
+# with a non-empty list only when OWNERSHIP_INCLUDE_MISSING is True.
+COUNTY_FIPS               = ""
+OWNERSHIP_FILTER          = []
+OWNERSHIP_INCLUDE_MISSING = False
 
 # User-selected field subset from GUI (None = full pass-through)
 SELECTED_HPMS_FIELDS = None
@@ -528,18 +540,27 @@ def run_state_enrichment(state_fips: str, local_df: pd.DataFrame = None, display
     never write to the same files; the placeholder is removed if the run
     ends without writing the CSV.
     """
-    label = display_fips if display_fips else state_fips
+    state = display_fips if display_fips else state_fips
+    label = run_label(state, _record_filters(state)["county_fips"])
     state_out_dir = os.path.join(OUTPUT_DIR, f"Output_State_{label}")
     stamp = datetime.now().strftime("%Y%m%d")
     version, csv_out = claim_output_version(
         state_out_dir, f"hpms_4d_production_{label}_{stamp}_v{{v}}.csv")
     try:
-        _run_state_enrichment(state_fips, local_df, label, state_out_dir, stamp, version, csv_out)
+        _run_state_enrichment(state_fips, local_df, state, label, state_out_dir, stamp, version, csv_out)
     finally:
         release_output_version(csv_out)
 
 
-def _run_state_enrichment(state_fips: str, local_df: pd.DataFrame, label: str,
+def _record_filters(state: str) -> dict:
+    """County and ownership filters of the run (CONFIGURATION block, or the
+    GUI's run_params.json), as keyword arguments for the core filters."""
+    return record_filter_args({"STATE_FIPS": state, "COUNTY_FIPS": COUNTY_FIPS,
+                               "OWNERSHIP_FILTER": OWNERSHIP_FILTER,
+                               "OWNERSHIP_INCLUDE_MISSING": OWNERSHIP_INCLUDE_MISSING})
+
+
+def _run_state_enrichment(state_fips: str, local_df: pd.DataFrame, state: str, label: str,
                           state_out_dir: str, stamp: str, version: int, csv_out: str):
     from core.rat_core import GridProgressWindow
     from core.rat_cross_section import DemTiles
@@ -547,12 +568,15 @@ def _run_state_enrichment(state_fips: str, local_df: pd.DataFrame, label: str,
     gpkg_out    = os.path.join(state_out_dir, f"hpms_4d_production_{label}_{stamp}_v{version}.gpkg")
     blender_out = os.path.join(state_out_dir, f"hpms_4d_blender_export_{label}_{stamp}_v{version}.shp")
 
-    logging.info(f"\n{'='*60}\n=== 4D ENRICHMENT: STATE FIPS {label} (v{version}) ===\n{'='*60}")
+    area = label.replace("_County_", ", COUNTY ")
+    where = label.replace("_County_", ", county ")   # "53" or "53, county 061" in log text
+    logging.info(f"\n{'='*60}\n=== 4D ENRICHMENT: STATE {area} (v{version}) ===\n{'='*60}")
 
     # The run's settings (from the GUI's run_params.json when run from the
     # GUI), with this state's FIPS for the smoothing-factor lookup.
     user_params = dict(RUN_PARAMS)
-    user_params.update({"OUTPUT_DIR": OUTPUT_DIR, "STATE_FIPS": label})
+    user_params.update({"OUTPUT_DIR": OUTPUT_DIR, "STATE_FIPS": state})
+    filters = _record_filters(state)
 
     if SELECTED_HPMS_FIELDS is not None:
         include_fields = SELECTED_HPMS_FIELDS
@@ -566,16 +590,17 @@ def _run_state_enrichment(state_fips: str, local_df: pd.DataFrame, label: str,
 
     try:
         if local_df is not None:
-            # The same state, facility type and functional system filters a
-            # Socrata query applies, as in the alignment.
+            # The same State, facility type, functional system, county and
+            # ownership filters a Socrata query applies, as in the alignment.
             df = local_df.copy()
-            df = filter_local_df_to_state(df, label)
+            df = filter_local_df_to_state(df, state)
             df = apply_facility_fsystem_filters(
                 df,
                 facility_filter=FACILITY_TYPE_FILTER or None,
                 fsystem_filter=FSYSTEM_FILTER or None,
                 include_missing_facility=FACILITY_TYPE_INCLUDE_MISSING,
                 include_missing_fsystem=FSYSTEM_INCLUDE_MISSING,
+                **filters,
             )
         else:
             df = fetch_socrata_state(
@@ -585,11 +610,12 @@ def _run_state_enrichment(state_fips: str, local_df: pd.DataFrame, label: str,
                 fsystem_filter=FSYSTEM_FILTER or None,
                 include_missing_facility=FACILITY_TYPE_INCLUDE_MISSING,
                 include_missing_fsystem=FSYSTEM_INCLUDE_MISSING,
+                **filters,
                 extra_cols=include_fields if include_fields else [],
                 url=SOCRATA_URL,
             )
     except Exception as e:
-        logging.error(f"Failed to fetch data for State {label}: {e}")
+        logging.error(f"Failed to fetch data for State {where}: {e}")
         return
 
     routes = df["RouteId"].dropna().unique().tolist()
@@ -597,10 +623,10 @@ def _run_state_enrichment(state_fips: str, local_df: pd.DataFrame, label: str,
 
     if len(df) == 0:
         logging.error(
-            f"No rows loaded for State FIPS {label}; stopping. If a cached "
+            f"No rows loaded for State FIPS {where}; stopping. If a cached "
             f"Socrata extract is being reused, it may be for a different "
             f"state. Turn off 'Reuse Socrata Cache' or delete the cached "
-            f"extract to download State FIPS {label} again."
+            f"extract to download State FIPS {where} again."
         )
         return
 
@@ -613,12 +639,12 @@ def _run_state_enrichment(state_fips: str, local_df: pd.DataFrame, label: str,
     # The national NBI/NTI tables are cut down to the state's padded
     # bounding box (see core.rat_core.compute_padded_bbox).
     state_bbox = compute_padded_bbox(df['geom_obj'])
-    nbi_nti_gdf = fetch_nbi_nti_state(label, bbox=state_bbox)
+    nbi_nti_gdf = fetch_nbi_nti_state(state, bbox=state_bbox)
 
     # Every 1 m tile the state needs, in the cache the alignment and
     # plan/profile runs share, downloaded before the workers start.
     cache_dir = os.path.join(DEM_DIR, "align_1m_cache")
-    ensure_dem_cells_cached(df['geom_obj'], cache_dir, log_label=f"state {label}", along_lines=True)
+    ensure_dem_cells_cached(df['geom_obj'], cache_dir, log_label=f"State {where}", along_lines=True)
 
     # ------------------------------------------------------------------
     # Continuity chunks and work items, as in rat_alignment_cli.py
@@ -652,7 +678,7 @@ def _run_state_enrichment(state_fips: str, local_df: pd.DataFrame, label: str,
     completed = 0
 
     logging.info(f"Starting {MAX_WORKERS} worker processes...")
-    progress_ui = GridProgressWindow(f"RAT 4D Engine: State {label}", len(work_items))
+    progress_ui = GridProgressWindow(f"RAT 4D Engine: State {where}", len(work_items))
 
     with ProcessPoolExecutor(
         max_workers=MAX_WORKERS,
@@ -784,7 +810,12 @@ def _run_state_enrichment(state_fips: str, local_df: pd.DataFrame, label: str,
     else:
         # Fields replaced with RAT values are kept even if not selected.
         core_keep     = {"RouteId", "FSystem", "Start_MP", "End_MP", "WKT_ZM", "Elevation_Source"}
-        keep_cols     = core_keep | {f for f in include_fields if f in out_df.columns} | set(replaced_cols)
+        # Loaded columns carry the suite's names (County_ID for county_id,
+        # ShapeId for shape_id), so selected fields are matched ignoring case.
+        by_lower = {c.lower(): c for c in out_df.columns}
+        by_lower.setdefault("shape_id", by_lower.get("shapeid"))
+        keep_cols     = (core_keep | {by_lower[f.lower()] for f in include_fields if by_lower.get(f.lower())}
+                         | set(replaced_cols))
         csv_drop_cols = [c for c in out_df.columns if c not in keep_cols]
         logging.info("The selected HPMS fields are kept in the output CSV.")
 
@@ -793,7 +824,7 @@ def _run_state_enrichment(state_fips: str, local_df: pd.DataFrame, label: str,
     logging.info(f"Saved enriched CSV: {os.path.basename(csv_out)}")
 
     if not (OUT_GPKG or OUT_SHP):
-        logging.info(f"Finished State {label}.")
+        logging.info(f"Finished State {where}.")
         return
 
     # The GeoPackage and shapefile carry the same fields as the CSV (WKT_ZM
@@ -829,7 +860,13 @@ def _run_state_enrichment(state_fips: str, local_df: pd.DataFrame, label: str,
     # 3. Shapefile in UTM for Blender
     if OUT_SHP:
         try:
-            utm_crs     = gdf.estimate_utm_crs()
+            # UTM zone of the median record position, so a few stray records
+            # far from the rest (e.g. records coded to the wrong county) do
+            # not move the whole export into another zone, as the bounding-box
+            # center used by estimate_utm_crs() would.
+            centers     = gdf.geometry.representative_point()
+            utm_crs     = CRS.from_epsg(get_appropriate_utm_zone(float(centers.x.median()),
+                                                                 float(centers.y.median())))
             gdf_blender = gdf.to_crs(utm_crs)
             # Shapefile field names are limited to 10 characters. The
             # driver shortens longer names (and renames clashes) itself;
@@ -848,7 +885,7 @@ def _run_state_enrichment(state_fips: str, local_df: pd.DataFrame, label: str,
         except Exception as e:
             logging.error(f"Failed to save Blender shapefile: {e}")
 
-    logging.info(f"Finished State {label}.")
+    logging.info(f"Finished State {where}.")
 
 
 def _local_state_label() -> str:
@@ -876,6 +913,7 @@ def main():
     global OUTPUT_DIR, DEM_DIR, STATES_TO_PROCESS, FACILITY_TYPE_FILTER
     global FSYSTEM_FILTER, INCLUDE_ALL_HPMS_FIELDS, SELECTED_HPMS_FIELDS
     global FACILITY_TYPE_INCLUDE_MISSING, FSYSTEM_INCLUDE_MISSING
+    global COUNTY_FIPS, OWNERSHIP_FILTER, OWNERSHIP_INCLUDE_MISSING
     global HORIZONTAL_CSV, GRADES_CSV, SOCRATA_TOKEN, SOCRATA_URL, OUT_GPKG, OUT_SHP, RUN_PARAMS
 
     if args.params_json and os.path.exists(args.params_json):
@@ -890,6 +928,9 @@ def main():
                                                    FACILITY_TYPE_INCLUDE_MISSING))
         FSYSTEM_INCLUDE_MISSING       = bool(p.get("FSYSTEM_INCLUDE_MISSING",
                                                    FSYSTEM_INCLUDE_MISSING))
+        COUNTY_FIPS               = p.get("COUNTY_FIPS", COUNTY_FIPS) or ""
+        OWNERSHIP_FILTER          = p.get("OWNERSHIP_FILTER", OWNERSHIP_FILTER) or []
+        OWNERSHIP_INCLUDE_MISSING = bool(p.get("OWNERSHIP_INCLUDE_MISSING", OWNERSHIP_INCLUDE_MISSING))
         gui_fields = p.get("INCLUDE_HPMS_FIELDS", "NOT_SET")
         if gui_fields != "NOT_SET":
             INCLUDE_ALL_HPMS_FIELDS = (gui_fields is None)
@@ -918,6 +959,18 @@ def main():
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs(DEM_DIR,    exist_ok=True)
+
+    # A county run needs one State, and a valid county code.
+    single_state = (len(STATES_TO_PROCESS) == 1 and str(STATES_TO_PROCESS[0]).isdigit()
+                    and str(STATES_TO_PROCESS[0]).zfill(2) != "00")
+    try:
+        county = _record_filters(STATES_TO_PROCESS[0] if single_state else "")["county_fips"]
+    except ValueError as e:
+        logging.error(str(e))
+        raise SystemExit(1)
+    if county and not single_state:
+        logging.error(f"COUNTY_FIPS {county} needs a single State in STATES_TO_PROCESS.")
+        raise SystemExit(1)
 
     try:
         if args.input:

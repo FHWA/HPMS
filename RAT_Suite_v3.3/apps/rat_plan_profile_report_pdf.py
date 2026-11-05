@@ -33,7 +33,7 @@ plan-view relief come from the cached 1 m DEM tiles, and cross-section
 sheets from the *_cross_sections.csv files, when present.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, October 29, 2026
+VERSION: 3.3, November 4, 2026
 """
 import os
 import sys
@@ -480,6 +480,16 @@ def add_cover_page(pdf: PdfPages, route_id: str, mp_start: float, mp_end: float,
     y -= 0.032
     fig.text(LX, y, "Run Date:", fontsize=13, fontweight='bold'); fig.text(LX + LABEL_W, y, str(date_str), fontsize=13)
     y -= 0.032
+    identity = (param_summary or {}).get("identity", {})
+    if "sight_warning_ft" in identity:
+        speed = identity.get("speed_mph")
+        warn = identity["sight_warning_ft"]
+        fig.text(LX, y, "Speed Limit:", fontsize=13, fontweight='bold')
+        fig.text(LX + LABEL_W, y, (f"{speed:g} mph (entered); sight warning under {warn:.0f} ft"
+                                   if speed is not None else
+                                   f"not entered (HPMS or default by class); sight warning under {warn:.0f} ft"),
+                 fontsize=13 if speed is not None else 11)
+        y -= 0.032
     fig.text(LX, y, "Total Sheets:", fontsize=13, fontweight='bold'); fig.text(LX + LABEL_W, y, str(num_pages), fontsize=13)
 
     y -= 0.045
@@ -1057,10 +1067,15 @@ def make_pdf(vertices_csv, horizontal_csv, vertical_csv, pdf_out, route_id, dem_
     # --- Run-parameters file (for the cover page) ---
     param_summary = None
     cover_date_str = date_str
+    # Sight distance warning distance: from the run-parameters file (the
+    # stopping sight distance for the speed entered, else 400 ft); 400 ft
+    # where the file is missing or older.
+    sight_warning_ft = 400.0
     if load_run_param_summary_json is not None:
         sidecar_path = find_run_parameters_sidecar(vertices_csv)
         param_summary = load_run_param_summary_json(sidecar_path)
         if param_summary:
+            sight_warning_ft = float(param_summary.get("identity", {}).get("sight_warning_ft") or sight_warning_ft)
             sidecar_run_date = param_summary.get("identity", {}).get("run_date")
             if sidecar_run_date:
                 # The date the CSVs were made, which differs from today's
@@ -1302,10 +1317,11 @@ def make_pdf(vertices_csv, horizontal_csv, vertical_csv, pdf_out, route_id, dem_
                     y_min_limit = avg_elev - 95 # Bottom of the Y-axis
                     ax_prof.plot(sub_mp, [y_min_limit] * len(sub_mp), color='gray', linewidth=4, alpha=0.3, zorder=0)
 
-                    blind_mask_local = sub_asd < 400
+                    blind_mask_local = sub_asd < sight_warning_ft
                     if blind_mask_local.any():
                         ax_prof.scatter(sub_mp[blind_mask_local], [y_min_limit] * np.sum(blind_mask_local),
-                                        color='red', s=10, marker='s', label='Sight Warning (<400ft)', zorder=4)
+                                        color='red', s=10, marker='s',
+                                        label=f'Sight Warning (<{sight_warning_ft:.0f} ft)', zorder=4)
                 # INTERCHANGE TOPOLOGY MARKERS
                 if 'Topology_Node' in vtx.columns:
                     topo_subset = vtx.loc[mask & (vtx['Topology_Node'] != 'None')].copy()

@@ -34,7 +34,7 @@ in inches) on its own right-hand axis, separate from IRI Reported (in/mi)
 on the left, because the two have different units.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, October 29, 2026
+VERSION: 3.3, November 5, 2026
 """
 import os
 import sys
@@ -52,6 +52,7 @@ if RAT_SUITE_DIR not in sys.path:
     sys.path.insert(0, RAT_SUITE_DIR)
 from core.rat_core import (
     build_params,
+    record_filter_args,
     SOCRATA_TOKEN as ENV_SOCRATA_TOKEN,
     FEET_PER_METER,
     build_route_continuity_chunks,
@@ -63,6 +64,9 @@ from core.rat_core import (
     build_grade_segments,
     label_vertices_by_segments,
     add_speed_reference,
+    stopping_sight_distance_ft,
+    SSD_TABLE_FT,
+    SIGHT_WARNING_FT,
     merge_horizontal_curves,
     calculate_headings,
     get_tangent_grade,
@@ -102,6 +106,23 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s: %(m
 # usually limited to Facility Types 1-2.
 NEARBY_LINES_FROM_SOCRATA = True
 # ===========================================================================
+
+
+def entered_speed(user_params: dict):
+    """The speed limit entered for the run (PP_SPEED_MPH, mph), or None if
+    blank. Raises ValueError if it is not a number within the AASHTO
+    stopping sight distance table (SSD_TABLE_FT, 15 to 80 mph)."""
+    raw = user_params.get("PP_SPEED_MPH")
+    if raw is None or str(raw).strip() == "":
+        return None
+    lo, hi = min(SSD_TABLE_FT), max(SSD_TABLE_FT)
+    try:
+        speed = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"Speed limit \"{raw}\" is not a number.")
+    if not lo <= speed <= hi:
+        raise ValueError(f"Speed limit {speed:g} mph is outside {lo} to {hi} mph.")
+    return speed
 
 
 def build_vertices_df(res: dict, route_id: str, chunk_s_mp: float, chunk_e_mp: float, global_start_dist_m: float, params: dict) -> pd.DataFrame:
@@ -280,7 +301,8 @@ def generate_calibration_dashboard(sample_chunks, demdir, base_params, out_html_
     with open(out_html_path, "w", encoding="utf-8") as out_f:
         out_f.write(html)
 
-def generate_interactive_profile(df_vtx, df_h, df_v, out_path, route_id, params=None):
+def generate_interactive_profile(df_vtx, df_h, df_v, out_path, route_id, params=None,
+                                 sight_warning_ft=SIGHT_WARNING_FT):
     """
     Interactive HTML dashboard for the route: curvature, the vertical
     profile with sight distance, and ride quality, with a range slider on
@@ -334,13 +356,14 @@ def generate_interactive_profile(df_vtx, df_h, df_v, out_path, route_id, params=
         line=dict(color="#e01f1f", width=1.0, dash='dot')
     ), row=2, col=1)
 
-    # Points where available sight distance is under 400 ft
+    # Points where available sight distance is under the warning distance
+    # (the stopping sight distance for the speed entered, else 400 ft)
     if 'Available_Sight_Dist_Ft' in df_vtx.columns:
-        blind_mask = df_vtx['Available_Sight_Dist_Ft'] < 400
+        blind_mask = df_vtx['Available_Sight_Dist_Ft'] < sight_warning_ft
         fig.add_trace(go.Scatter(
             x=df_vtx.loc[blind_mask, 'Milepost'],
             y=df_vtx.loc[blind_mask, 'Elev_Ft'],
-            mode='markers', name='Sight Obstruction (<400ft)',
+            mode='markers', name=f'Sight Obstruction (<{sight_warning_ft:.0f} ft)',
             marker=dict(color='red', size=5, symbol='x')
         ), row=2, col=1)
 
@@ -524,6 +547,18 @@ def main():
 
     params = build_params(user_params)
     logging.info(describe_smoothing_factors(params))
+    speed_mph = entered_speed(user_params)
+    if speed_mph is not None:
+        sight_warning_ft = stopping_sight_distance_ft(speed_mph)
+        logging.info(f"Speed limit entered for this run: {speed_mph:g} mph. Every vertical curve is "
+                     f"compared with it, and points with available sight distance under "
+                     f"{sight_warning_ft:.0f} ft (AASHTO stopping sight distance at {speed_mph:g} mph) "
+                     f"are marked.")
+    else:
+        sight_warning_ft = SIGHT_WARNING_FT
+        logging.info(f"No speed limit entered: vertical curves are compared with the HPMS speed limit "
+                     f"where reported, else the default for the functional class; points with "
+                     f"available sight distance under {sight_warning_ft:.0f} ft are marked.")
 
     shared_cache_dir = os.path.join(args.demdir, "align_1m_cache")
 
@@ -531,16 +566,19 @@ def main():
     df = load_local_hpms(args.input)
     df_all = df
 
-    # The facility type filter only; the route is chosen by its ID, so its
-    # functional system is not filtered.
+    # The facility type, county and ownership filters; the route is chosen
+    # by its ID, so its functional system is not filtered. With a county
+    # selected, only the part of the route in that county is processed.
     initial_count = len(df)
     df = apply_facility_fsystem_filters(
         df,
         facility_filter=user_params.get("FACILITY_TYPE_FILTER", []),
         include_missing_facility=bool(user_params.get("FACILITY_TYPE_INCLUDE_MISSING", False)),
         include_missing_fsystem=True,
+        **record_filter_args(user_params),
     ).copy()
-    logging.info(f"Dropped {initial_count - len(df):,} rows based on Facility Type filters.")
+    logging.info(f"Dropped {initial_count - len(df):,} rows based on the facility type, "
+                 f"county and ownership filters.")
 
     logging.info(f"Rows loaded: {len(df):,}")
     route_norm = str(args.route).strip().upper()
@@ -635,7 +673,7 @@ def main():
             for key in ("Start_Dist", "End_Dist", "VPI_Dist"):
                 if key in c:
                     c[key] += info["global_start_dist_m"]
-        add_speed_reference(v, sub, info["f_sys"])
+        add_speed_reference(v, sub, info["f_sys"], speed_mph)
 
         all_h.extend(h)
         all_v.extend(v)
@@ -671,7 +709,10 @@ def main():
             params, route_id=route_norm,
             mp_start=float(global_mp_start), mp_end=float(global_mp_end),
         )
-        param_summary.setdefault("identity", {})["dem_tile_dir"] = shared_cache_dir
+        identity = param_summary.setdefault("identity", {})
+        identity["dem_tile_dir"] = shared_cache_dir
+        identity["speed_mph"] = speed_mph
+        identity["sight_warning_ft"] = sight_warning_ft
         save_run_param_summary_json(param_summary, params_json_path)
         logging.info(f"Saved run-parameters summary: {params_json_path}")
     except Exception as e:
@@ -796,7 +837,8 @@ def main():
     dashboard_html = os.path.join(args.outdir, f"{base}_analytics_dashboard.html")
     try:
         logging.info("Generating interactive analytics dashboard...")
-        generate_interactive_profile(final_vtx_df, final_h_df, final_v_df, dashboard_html, route_norm, params=params)
+        generate_interactive_profile(final_vtx_df, final_h_df, final_v_df, dashboard_html, route_norm, params=params,
+                                     sight_warning_ft=sight_warning_ft)
         logging.info(f"Dashboard saved: {dashboard_html}")
     except Exception as e:
         logging.warning(f"Could not generate dashboard: {e}")

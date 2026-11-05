@@ -24,7 +24,7 @@ it collects inputs, packages them into a JSON payload, and uses the subprocess
 module to safely execute the suite's CLI scripts in isolated memory environments.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, October 29, 2026
+VERSION: 3.3, November 5, 2026
 """
 
 import os
@@ -52,7 +52,11 @@ RAT_SUITE_DIR = os.path.dirname(THIS_DIR)
 if RAT_SUITE_DIR not in sys.path:
     sys.path.insert(0, RAT_SUITE_DIR)
 
-from core.rat_core import fetch_socrata_state, NATIONAL_DEFAULTS, NATIONAL_V_SMOOTH_FACTOR
+from core.rat_core import (
+    fetch_socrata_state, NATIONAL_DEFAULTS, NATIONAL_V_SMOOTH_FACTOR, SSD_TABLE_FT,
+    OWNERSHIP_CODES, normalize_county_fips, record_filter_args, run_label,
+    socrata_area_clauses, load_local_hpms, apply_facility_fsystem_filters,
+)
 
 SOCRATA_DEFAULT = "https://datahub.transportation.gov/resource/42um-tgh5.json"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s: %(message)s")
@@ -327,6 +331,87 @@ class HMPSFieldSelectorDialog:
         self.win.destroy()
 
 
+def ownership_summary(codes, include_missing) -> str:
+    """Text of the Ownership button: "All owners", one owner's name, or
+    the number of owners selected."""
+    if not codes:
+        return "All owners"
+    text = (f"{codes[0]}: {OWNERSHIP_CODES.get(codes[0], 'Code ' + str(codes[0]))}"
+            if len(codes) == 1 else f"{len(codes)} owners selected")
+    return text + (" + blank" if include_missing else "")
+
+
+class OwnershipDialog:
+    """
+    Drop-down list of HPMS Ownership codes with a check box for each, and
+    one for records with no ownership reported. Opens just below the
+    Ownership button. result is (codes, include_missing) on OK, where an
+    empty codes list means every record (all boxes checked), or None on
+    Cancel.
+    """
+    def __init__(self, parent_root, anchor, codes, include_missing):
+        self.result = None
+        everything = not codes
+        self.win = tk.Toplevel(parent_root)
+        self.win.title("Ownership")
+        self.win.transient(parent_root)
+        self.win.resizable(False, False)
+
+        frm = ttk.Frame(self.win, padding=8)
+        frm.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(frm, text="Process records owned by:", font=("Arial", 9, "bold")).grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
+
+        self._vars = {}
+        items = list(OWNERSHIP_CODES.items())
+        half = (len(items) + 1) // 2
+        for i, (code, name) in enumerate(items):
+            var = tk.BooleanVar(value=everything or code in codes)
+            self._vars[code] = var
+            ttk.Checkbutton(frm, text=f"{code}: {name}", variable=var).grid(
+                row=1 + i % half, column=i // half, sticky="w", padx=(0, 12))
+        self._missing = tk.BooleanVar(value=everything or include_missing)
+        ttk.Checkbutton(frm, text="Missing (no ownership reported)", variable=self._missing).grid(
+            row=1 + half, column=0, columnspan=2, sticky="w", pady=(4, 0))
+
+        btns = ttk.Frame(frm)
+        btns.grid(row=2 + half, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        ttk.Button(btns, text="Select All", command=lambda: self._set_all(True)).pack(side=tk.LEFT)
+        ttk.Button(btns, text="Clear All", command=lambda: self._set_all(False)).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btns, text="Cancel", command=self.win.destroy).pack(side=tk.RIGHT)
+        ttk.Button(btns, text="OK", command=self._ok).pack(side=tk.RIGHT, padx=4)
+
+        self.win.bind("<Escape>", lambda e: self.win.destroy())
+        self.win.bind("<Return>", lambda e: self._ok())
+        # Open below the button, like a drop-down list, kept on the screen.
+        self.win.update_idletasks()
+        x = anchor.winfo_rootx()
+        y = anchor.winfo_rooty() + anchor.winfo_height()
+        x = max(0, min(x, self.win.winfo_screenwidth() - self.win.winfo_reqwidth()))
+        y = max(0, min(y, self.win.winfo_screenheight() - self.win.winfo_reqheight() - 40))
+        self.win.geometry(f"+{x}+{y}")
+        self.win.grab_set()
+        self.win.focus_set()
+
+    def _set_all(self, value):
+        for var in self._vars.values():
+            var.set(value)
+        self._missing.set(value)
+
+    def _ok(self):
+        codes = [c for c, v in self._vars.items() if v.get()]
+        if not codes:
+            messagebox.showerror("Ownership", "Select at least one owner. The Missing box adds "
+                                              "records with no ownership to the selected ones.",
+                                 parent=self.win)
+            return
+        include_missing = bool(self._missing.get())
+        if len(codes) == len(self._vars) and include_missing:
+            codes = []  # every record
+        self.result = (codes, include_missing)
+        self.win.destroy()
+
+
 class ErrorLineCounter(logging.Handler):
     """Counts the errors logged during a run: records logged at ERROR or
     above, and lines relayed from the alignment, plan/profile and 4D
@@ -379,6 +464,11 @@ class RATUnifiedGUI:
             "output_dir": tk.StringVar(),
             "dem_dir": tk.StringVar(value=os.path.join(os.getcwd(), "elevation_cache")),
             "state_fips": tk.StringVar(),
+            # County FIPS for a county run (blank = whole State) and records
+            # with no ownership when owners are selected (OWNERSHIP_FILTER,
+            # self.ownership_codes).
+            "county_fips": tk.StringVar(value=""),
+            "ownership_include_missing": tk.BooleanVar(value=False),
             "socrata_token": tk.StringVar(),
             "use_local": tk.BooleanVar(value=False),
             "reuse_socrata_cache": tk.BooleanVar(value=False),
@@ -418,6 +508,7 @@ class RATUnifiedGUI:
             "pp_route_id": tk.StringVar(),
             "pp_start_rp": tk.StringVar(value=""),
             "pp_end_rp": tk.StringVar(value=""),
+            "pp_speed_mph": tk.StringVar(value=""),
 
             "do_alignment": tk.BooleanVar(value=True),
             "do_plan_profile": tk.BooleanVar(value=False),
@@ -469,6 +560,9 @@ class RATUnifiedGUI:
             "MAX_CHUNK_SPLIT_MILES": tk.StringVar(value="25"),
             "CHUNK_SPLIT_PADDING_FT": tk.StringVar(value="20000"),
         }
+
+        # Ownership codes selected; an empty list means every record.
+        self.ownership_codes = []
 
         self._build_ui()
         self._setup_logger()
@@ -558,6 +652,19 @@ class RATUnifiedGUI:
 
         ttk.Label(lf_input, text="Socrata Token (optional):").grid(row=3, column=2, sticky="e", pady=4)
         ttk.Entry(lf_input, textvariable=self.vars["socrata_token"], width=35).grid(row=3, column=3, sticky="w")
+
+        # County and ownership: limit a one-State run to one county and to
+        # the selected owners (e.g. 2: County Highway Agency).
+        ttk.Label(lf_input, text="County FIPS:").grid(row=4, column=0, sticky="e", pady=4)
+        frame_county = ttk.Frame(lf_input)
+        frame_county.grid(row=4, column=1, sticky="w")
+        ttk.Entry(frame_county, textvariable=self.vars["county_fips"], width=12).pack(side=tk.LEFT)
+        ttk.Label(frame_county, text="optional, e.g. 033; blank = whole State",
+                  foreground="#555555", font=("Arial", 8, "italic")).pack(side=tk.LEFT, padx=6)
+        ttk.Label(lf_input, text="Ownership:").grid(row=4, column=2, sticky="e", pady=4)
+        self.btn_ownership = ttk.Button(lf_input, text="All owners  \u25BE", width=33,
+                                        command=self._choose_ownership)
+        self.btn_ownership.grid(row=4, column=3, sticky="w")
 
         lf_fsys = ttk.LabelFrame(lf_input, text="Functional System Filters", padding=8)
         lf_fsys.grid(row=5, column=0, columnspan=5, sticky="ew", pady=8)
@@ -662,6 +769,11 @@ class RATUnifiedGUI:
         ttk.Entry(lf_modes, textvariable=self.vars["pp_start_rp"], width=12).grid(row=4, column=1, sticky="w")
         ttk.Label(lf_modes, text="End RP (mi):").grid(row=4, column=2, sticky="e", pady=4)
         ttk.Entry(lf_modes, textvariable=self.vars["pp_end_rp"], width=12).grid(row=4, column=3, sticky="w")
+        ttk.Label(lf_modes, text="Speed Limit (mph):").grid(row=5, column=0, sticky="e", pady=4)
+        ttk.Entry(lf_modes, textvariable=self.vars["pp_speed_mph"], width=12).grid(row=5, column=1, sticky="w")
+        ttk.Label(lf_modes, text="Plan/Profile only, optional (15-80). Blank: HPMS speed limit, else the "
+                                 "default for the functional class.",
+                  foreground="#555555", font=("Arial", 8, "italic")).grid(row=5, column=2, columnspan=3, sticky="w")
 
         lf_param_workspace = ttk.LabelFrame(main, text="4) Parameters", padding=12)
         lf_param_workspace.pack(fill=tk.X, pady=6)
@@ -790,6 +902,51 @@ class RATUnifiedGUI:
         self.log_text.bind("<Enter>", _bind_log_scroll)
         self.log_text.bind("<Leave>", _unbind_log_scroll)
 
+    def _choose_ownership(self):
+        dlg = OwnershipDialog(self.root, self.btn_ownership, self.ownership_codes,
+                              bool(self.vars["ownership_include_missing"].get()))
+        if dlg.win.winfo_exists():
+            self.root.wait_window(dlg.win)
+        if dlg.result is not None:
+            self.ownership_codes, include_missing = dlg.result
+            self.vars["ownership_include_missing"].set(include_missing)
+            self._update_ownership_button()
+
+    def _update_ownership_button(self):
+        self.btn_ownership.configure(text=ownership_summary(
+            self.ownership_codes, bool(self.vars["ownership_include_missing"].get())) + "  \u25BE")
+
+    def _county_entry_error(self):
+        """Message if the County FIPS box is not blank or a valid county of
+        the State entered; None if it is fine."""
+        county = self.vars["county_fips"].get().strip()
+        if not county:
+            return None
+        state = self.vars["state_fips"].get().strip()
+        if not self._is_state_fips(state):
+            return "A county run needs a State. Enter the State FIPS, or clear County FIPS."
+        try:
+            normalize_county_fips(county, state.zfill(2))
+        except ValueError as e:
+            return f"{e} Enter the three-digit county code (e.g. 033), or leave it blank."
+        return None
+
+    def _speed_entry_error(self):
+        """Message if the Speed Limit box holds something other than blank
+        or a speed within the AASHTO stopping sight distance table (15 to
+        80 mph); None if it is fine."""
+        raw = self.vars["pp_speed_mph"].get().strip()
+        if not raw:
+            return None
+        lo, hi = min(SSD_TABLE_FT), max(SSD_TABLE_FT)
+        try:
+            speed = float(raw)
+        except ValueError:
+            return f"Speed Limit \"{raw}\" is not a number. Enter a speed in mph, or leave it blank."
+        if not lo <= speed <= hi:
+            return f"Speed Limit must be between {lo} and {hi} mph, or blank."
+        return None
+
     def _apply_params_dict(self, data: dict):
         """
         Restores the GUI from a loaded params dict. Used both when the GUI
@@ -802,6 +959,7 @@ class RATUnifiedGUI:
         finally:
             self._restoring_params = False
         self._toggle_source()
+        self._update_ownership_button()
 
     def _apply_params_values(self, data: dict):
         if data.get("OUTPUT_DIR"):
@@ -823,6 +981,8 @@ class RATUnifiedGUI:
                 allowed_fsys = set(int(val) for val in (v or []))
                 for i in range(1, 8):
                     self.fsys_vars[i].set(i in allowed_fsys)
+            elif k == "OWNERSHIP_FILTER":
+                self.ownership_codes = [int(val) for val in (v or [])]
             elif k == "FACILITY_TYPE_FILTER":
                 allowed_facs = set(v or [])
                 for fac_val, var_name in [(1, "fac_1"), (2, "fac_2"), (4, "fac_4"), (5, "fac_5"), (6, "fac_6"), (7, "fac_7")]:
@@ -1332,6 +1492,10 @@ class RATUnifiedGUI:
             "FSYSTEM_INCLUDE_MISSING": bool(self.vars["fsystem_include_missing"].get()),
             "FACILITY_TYPE_INCLUDE_MISSING": bool(self.vars["facility_type_include_missing"].get()),
             "STATE_FIPS": state_fips_input,
+            # Checked when a run starts (_county_entry_error); saved as typed.
+            "COUNTY_FIPS": self.vars["county_fips"].get().strip(),
+            "OWNERSHIP_FILTER": list(self.ownership_codes),
+            "OWNERSHIP_INCLUDE_MISSING": bool(self.vars["ownership_include_missing"].get()),
             "SOCRATA_TOKEN": self.vars["socrata_token"].get().strip(),
             "INPUT_URL": self.vars["input_url"].get().strip(),
 
@@ -1365,6 +1529,8 @@ class RATUnifiedGUI:
         
         data["PP_START_RP"] = float(start_val) if start_val and start_val.lower() != "none" else None
         data["PP_END_RP"] = float(end_val) if end_val and end_val.lower() != "none" else None
+        # Checked when a plan/profile run starts (_speed_entry_error); saved as typed.
+        data["PP_SPEED_MPH"] = self.vars["pp_speed_mph"].get().strip()
 
         for k, var in self.advanced_defaults.items():
             val = str(var.get()).strip()
@@ -1470,6 +1636,20 @@ class RATUnifiedGUI:
                 self.advanced_defaults[k].set(v)
         logging.info("Advanced parameters restored to default.")
 
+    def _route_list_filters(self) -> dict:
+        """County and ownership filters for Load Routes. An invalid county
+        is reported and ignored here; the run itself stops on it."""
+        state = self.vars["state_fips"].get().strip()
+        params = {"STATE_FIPS": state, "COUNTY_FIPS": self.vars["county_fips"].get().strip(),
+                  "OWNERSHIP_FILTER": self.ownership_codes,
+                  "OWNERSHIP_INCLUDE_MISSING": bool(self.vars["ownership_include_missing"].get())}
+        try:
+            return record_filter_args(params)
+        except ValueError as e:
+            logging.warning(f"{e} Routes are listed for the whole State.")
+            params["COUNTY_FIPS"] = ""
+            return record_filter_args(params)
+
     def _load_routes_thread(self):
         threading.Thread(target=self._load_routes, daemon=True).start()
 
@@ -1493,6 +1673,14 @@ class RATUnifiedGUI:
                 if not col:
                     logging.error("Route column not found in local file.")
                     return
+                if self.vars["county_fips"].get().strip() or self.ownership_codes:
+                    # Only the routes with records in the county and among
+                    # the owners selected.
+                    filters = self._route_list_filters()
+                    df = apply_facility_fsystem_filters(load_local_hpms(local), facility_filter=[1, 2, 4, 5, 6, 7],
+                                                        include_missing_facility=True,
+                                                        include_missing_fsystem=True, **filters)
+                    col = "RouteId"
                 routes = sorted(df[col].dropna().astype(str).unique().tolist())
             else:
                 url = self.vars["input_url"].get().strip() or SOCRATA_DEFAULT
@@ -1500,6 +1688,11 @@ class RATUnifiedGUI:
                 token = self.vars["socrata_token"].get().strip()
                 headers = {"X-App-Token": token} if token else {}
                 where = f"stateid='{state.zfill(2)}'" if state else ""
+                if where:
+                    filters = self._route_list_filters()
+                    where = " AND ".join([where] + socrata_area_clauses(
+                        state.zfill(2), filters["county_fips"], filters["ownership_filter"],
+                        filters["include_missing_ownership"]))
                 params = {"$select": "distinct route_id", "$order": "route_id", "$limit": 100000}
                 if where:
                     params["$where"] = where
@@ -1768,7 +1961,7 @@ class RATUnifiedGUI:
             if rc is None:
                 continue
             checked.append(label)
-            logging.info(f"=== Validation Report: State {label} ===")
+            logging.info(f"=== Validation Report: State {label.replace('_County_', ', county ')} ===")
             logging.info(vmsg if vmsg else "No validator output.")
             if rc != 0:
                 failed.append(label)
@@ -1798,11 +1991,16 @@ class RATUnifiedGUI:
         return vtx[-1], hor[-1], ver[-1]
 
     def _run_output_dir(self, out_dir: str):
-        """(folder, label) for a run's Run Log: the state's output folder
-        for a single-state run, otherwise the output folder itself."""
+        """(folder, label) for a run's Run Log: the State's (or the State
+        and county's) output folder for a single-State run, otherwise the
+        output folder itself."""
         fips = self.vars["state_fips"].get().strip()
         if self._is_state_fips(fips):
-            label = fips.zfill(2)
+            try:
+                county = normalize_county_fips(self.vars["county_fips"].get(), fips.zfill(2))
+            except ValueError:
+                county = None
+            label = run_label(fips.zfill(2), county)
             return os.path.join(out_dir, f"Output_State_{label}"), label
         if self.vars["use_local"].get() and fips.upper() not in ("", "00", "ALL"):
             return out_dir, re.sub(r"[^A-Za-z0-9]+", "_", fips)
@@ -1873,6 +2071,12 @@ class RATUnifiedGUI:
                                      "records with no facility type to the selected ones.")
                 return
 
+            county_error = self._county_entry_error()
+            if county_error:
+                self._set_status("Error", county_error, busy=False)
+                messagebox.showerror("County FIPS", county_error)
+                return
+
             os.makedirs(out_dir, exist_ok=True)
             os.makedirs(dem_dir, exist_ok=True)
 
@@ -1933,6 +2137,7 @@ class RATUnifiedGUI:
                         "FSYSTEM_FILTER": run_params.get("FSYSTEM_FILTER"),
                         "FACILITY_TYPE_INCLUDE_MISSING": bool(run_params.get("FACILITY_TYPE_INCLUDE_MISSING", False)),
                         "FSYSTEM_INCLUDE_MISSING": bool(run_params.get("FSYSTEM_INCLUDE_MISSING", False)),
+                        **record_filter_args(run_params),
                     }
                     use_cached = (
                         self.vars.get("reuse_socrata_cache") is not None
@@ -1977,6 +2182,7 @@ class RATUnifiedGUI:
                                 fsystem_filter=fsystem_filter,
                                 include_missing_facility=bool(run_params.get("FACILITY_TYPE_INCLUDE_MISSING", False)),
                                 include_missing_fsystem=bool(run_params.get("FSYSTEM_INCLUDE_MISSING", False)),
+                                **record_filter_args(run_params),
                                 url=url,
                                 progress_callback=_progress,
                             )
@@ -2052,6 +2258,12 @@ class RATUnifiedGUI:
                         "Unknown Route",
                         f"Route ID \"{route_id}\" is not among the {len(self._all_routes):,} routes loaded. "
                         "Pick one from the list under the Route ID field.")
+                    return
+
+                speed_error = self._speed_entry_error()
+                if speed_error:
+                    self._set_status("Error", speed_error, busy=False)
+                    messagebox.showerror("Speed Limit", speed_error)
                     return
 
                 self._set_status("Plan/Profile", f"Running plan/profile for route {route_id}...", busy=True)
@@ -2154,8 +2366,7 @@ class RATUnifiedGUI:
                     ]
                 
                 if self.vars["replace_curve_grade"].get():
-                    state_label = self.vars["state_fips"].get().strip().zfill(2)
-                    state_out_dir = os.path.join(out_dir, f"Output_State_{state_label}") if state_label and state_label != "00" else out_dir
+                    state_out_dir = self._run_output_dir(out_dir)[0]
                     
                     h_files = sorted([
                         os.path.join(r, f)

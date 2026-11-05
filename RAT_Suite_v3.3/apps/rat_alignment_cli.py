@@ -30,7 +30,7 @@ the same output. Elevations come from the USGS 3DEP 1 m DEM, cached in
 align_1m_cache under the DEM directory.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, October 29, 2026
+VERSION: 3.3, November 5, 2026
 """
 import os
 import glob
@@ -62,6 +62,7 @@ if RAT_SUITE_DIR not in sys.path:
 
 from core.rat_core import (
     build_params,
+    SIGHT_WARNING_FT,
     SOCRATA_TOKEN as ENV_SOCRATA_TOKEN,
     write_gdf_with_retry,
     audit_route_ordering,
@@ -82,6 +83,8 @@ from core.rat_core import (
     load_local_hpms,
     filter_local_df_to_state,
     apply_facility_fsystem_filters,
+    record_filter_args,
+    run_label,
     FEET_PER_METER,
     calculate_headings,
     get_tangent_grade,
@@ -91,6 +94,7 @@ from core.rat_core import (
     run_bounded_parallel,
     DemCacheUnavailable,
     require_dem_cache,
+    ensure_dem_cells_cached,
     claim_output_version,
     release_output_version,
     raise_if_dem_cache_lost,
@@ -1467,15 +1471,18 @@ def run_state_alignment(state_fips: str, out_dir: str, dem_dir: str, user_params
     when the run starts (core.rat_core.claim_output_version, on the
     horizontal CSV name), so two runs can never write to the same files;
     the placeholder is removed if the run ends without writing it.
+    A county run (COUNTY_FIPS) writes to Output_State_<State>_County_<county>,
+    with the same label in its file names (run_label).
     """
-    state_out_dir = os.path.join(out_dir, f"Output_State_{state_fips}")
+    label = run_label(state_fips, record_filter_args(user_params)["county_fips"])
+    state_out_dir = os.path.join(out_dir, f"Output_State_{label}")
     stamp = datetime.now().strftime("%Y%m%d")
     version, claimed = claim_output_version(
-        state_out_dir, f"alignment_horizontal_{state_fips}_{stamp}_v{{v}}.csv")
+        state_out_dir, f"alignment_horizontal_{label}_{stamp}_v{{v}}.csv")
     try:
         _run_state_alignment(state_fips, out_dir, dem_dir, user_params, local_df, stamp, version)
     finally:
-        others = [f for f in glob.glob(os.path.join(state_out_dir, f"alignment_*_{state_fips}_{stamp}_v{version}.*"))
+        others = [f for f in glob.glob(os.path.join(state_out_dir, f"alignment_*_{label}_{stamp}_v{version}.*"))
                   if os.path.abspath(f) != os.path.abspath(claimed)]
         if others and os.path.exists(claimed) and os.path.getsize(claimed) == 0:
             # The run wrote its other files but found no horizontal curves:
@@ -1491,18 +1498,21 @@ def _run_state_alignment(state_fips: str, out_dir: str, dem_dir: str, user_param
     from shapely.wkt import loads
     from concurrent.futures import ProcessPoolExecutor
 
-    state_out_dir = os.path.join(out_dir, f"Output_State_{state_fips}")
+    filters = record_filter_args(user_params)
+    label = run_label(state_fips, filters["county_fips"])
+    state_out_dir = os.path.join(out_dir, f"Output_State_{label}")
 
-    h_csv     = os.path.join(state_out_dir, f"alignment_horizontal_{state_fips}_{stamp}_v{version}.csv")
-    v_csv     = os.path.join(state_out_dir, f"alignment_vertical_{state_fips}_{stamp}_v{version}.csv")
-    g_csv     = os.path.join(state_out_dir, f"alignment_grades_{state_fips}_{stamp}_v{version}.csv")
-    vtx_csv   = os.path.join(state_out_dir, f"alignment_vertices_{state_fips}_{stamp}_v{version}.csv")
-    score_csv = os.path.join(state_out_dir, f"alignment_section_scores_{state_fips}_{stamp}_v{version}.csv")
-    spans_csv = os.path.join(state_out_dir, f"alignment_structure_spans_{state_fips}_{stamp}_v{version}.csv")
-    order_audit_csv = os.path.join(state_out_dir, f"alignment_order_audit_{state_fips}_{stamp}_v{version}.csv")
+    h_csv     = os.path.join(state_out_dir, f"alignment_horizontal_{label}_{stamp}_v{version}.csv")
+    v_csv     = os.path.join(state_out_dir, f"alignment_vertical_{label}_{stamp}_v{version}.csv")
+    g_csv     = os.path.join(state_out_dir, f"alignment_grades_{label}_{stamp}_v{version}.csv")
+    vtx_csv   = os.path.join(state_out_dir, f"alignment_vertices_{label}_{stamp}_v{version}.csv")
+    score_csv = os.path.join(state_out_dir, f"alignment_section_scores_{label}_{stamp}_v{version}.csv")
+    spans_csv = os.path.join(state_out_dir, f"alignment_structure_spans_{label}_{stamp}_v{version}.csv")
+    order_audit_csv = os.path.join(state_out_dir, f"alignment_order_audit_{label}_{stamp}_v{version}.csv")
     logging.info(f"Output version: v{version}")
 
-    logging.info(f"\n{'='*60}\n=== ALIGNMENT PROCESSING: STATE {state_fips} ===\n{'='*60}")
+    area = f"STATE {state_fips}" + (f", COUNTY {filters['county_fips']}" if filters["county_fips"] else "")
+    logging.info(f"\n{'='*60}\n=== ALIGNMENT PROCESSING: {area} ===\n{'='*60}")
 
     user_params_local = user_params.copy()
     user_params_local["STATE_FIPS"] = state_fips
@@ -1512,7 +1522,8 @@ def _run_state_alignment(state_fips: str, out_dir: str, dem_dir: str, user_param
     try:
         if local_df is not None:
             df = local_df.copy()
-            # The same state and facility filters a Socrata query applies.
+            # The same State, facility type, functional system, county and
+            # ownership filters a Socrata query applies.
             df = filter_local_df_to_state(df, state_fips)
             df = apply_facility_fsystem_filters(
                 df,
@@ -1520,6 +1531,7 @@ def _run_state_alignment(state_fips: str, out_dir: str, dem_dir: str, user_param
                 fsystem_filter=user_params.get("FSYSTEM_FILTER"),
                 include_missing_facility=bool(user_params.get("FACILITY_TYPE_INCLUDE_MISSING", False)),
                 include_missing_fsystem=bool(user_params.get("FSYSTEM_INCLUDE_MISSING", False)),
+                **filters,
             )
         else:
             df = fetch_socrata_state(
@@ -1529,6 +1541,7 @@ def _run_state_alignment(state_fips: str, out_dir: str, dem_dir: str, user_param
                 fsystem_filter=user_params.get("FSYSTEM_FILTER"),
                 include_missing_facility=bool(user_params.get("FACILITY_TYPE_INCLUDE_MISSING", False)),
                 include_missing_fsystem=bool(user_params.get("FSYSTEM_INCLUDE_MISSING", False)),
+                **filters,
             )
     except Exception as e:
         logging.error(f"Failed to fetch dataset coordinates: {e}")
@@ -1584,20 +1597,16 @@ def _run_state_alignment(state_fips: str, out_dir: str, dem_dir: str, user_param
     state_bbox = compute_padded_bbox(df['geom_obj'])
     nbi_nti_gdf = fetch_nbi_nti_state(state_fips, bbox=state_bbox)
 
-    # Every DEM tile the run needs is downloaded here, one at a time,
-    # before the workers start. The tiles are the ones the roads pass
-    # through (get_line_dem_cells), not those in a bounding box, which for a
-    # long diagonal road takes in many tiles it never enters, would break
-    # across the antimeridian (western Aleutians) and would pull in
-    # open-ocean tiles around Hawaii and Puerto Rico.
+    # Every DEM tile the run needs is downloaded here, several at a time
+    # (ensure_dem_cells_cached, as in the 4D enrichment), before the workers
+    # start. The tiles are the ones the roads pass through
+    # (get_line_dem_cells), not those in a bounding box, which for a long
+    # diagonal road takes in many tiles it never enters, would break across
+    # the antimeridian (western Aleutians) and would pull in open-ocean
+    # tiles around Hawaii and Puerto Rico.
     shared_cache_dir = os.path.join(dem_dir, "align_1m_cache")
-    require_dem_cache(shared_cache_dir)
-    from core.rat_core import download_dem_cell, get_line_dem_cells
-    needed_cells = get_line_dem_cells(df['geom_obj'])
-    logging.info(f"Pre-fetching {len(needed_cells)} DEM tile(s) for the state footprint "
-                 f"before starting parallel processing...")
-    for lon_deg, lat_deg in sorted(needed_cells):
-        download_dem_cell(lon_deg, lat_deg, shared_cache_dir)
+    ensure_dem_cells_cached(df['geom_obj'], shared_cache_dir,
+                            log_label=f"state {state_fips}", along_lines=True)
     logging.info("DEM download complete.")
 
     # ------------------------------------------------------------------
@@ -1839,9 +1848,9 @@ def _run_state_alignment(state_fips: str, out_dir: str, dem_dir: str, user_param
             df_g.drop(columns=["geometry"], errors="ignore").to_csv(g_csv, index=False)
             logging.info(f"Saved Grades CSV to: {g_csv}")
 
-    export_geo(df_h, os.path.join(state_out_dir, f"alignment_horizontal_{state_fips}_{stamp}_v{version}"), params)
-    export_geo(df_v, os.path.join(state_out_dir, f"alignment_vertical_{state_fips}_{stamp}_v{version}"), params)
-    export_geo(df_g, os.path.join(state_out_dir, f"alignment_grades_{state_fips}_{stamp}_v{version}"), params)
+    export_geo(df_h, os.path.join(state_out_dir, f"alignment_horizontal_{label}_{stamp}_v{version}"), params)
+    export_geo(df_v, os.path.join(state_out_dir, f"alignment_vertical_{label}_{stamp}_v{version}"), params)
+    export_geo(df_g, os.path.join(state_out_dir, f"alignment_grades_{label}_{stamp}_v{version}"), params)
 
     # Vertices GPKG (OUT_VTX_SPATIAL), written 50,000 rows at a time with
     # fiona. Writing it through geopandas runs out of memory on large
@@ -1849,21 +1858,21 @@ def _run_state_alignment(state_fips: str, out_dir: str, dem_dir: str, user_param
     if params.get("OUT_VTX_SPATIAL", False) and not df_vtx.empty \
             and "Lon" in df_vtx.columns and "Lat" in df_vtx.columns:
         vtx_gpkg_path = os.path.join(
-            state_out_dir, f"alignment_vertices_{state_fips}_{stamp}_v{version}.gpkg"
+            state_out_dir, f"alignment_vertices_{label}_{stamp}_v{version}.gpkg"
         )
         export_vertices_gpkg_batched(df_vtx, vtx_gpkg_path)
 
     # Intersections GPKG
     if params.get("OUT_GPKG", True) and not df_vtx.empty and 'Topology_Node' in df_vtx.columns:
         intersections_gpkg_path = os.path.join(
-            state_out_dir, f"alignment_intersections_{state_fips}_{stamp}_v{version}.gpkg"
+            state_out_dir, f"alignment_intersections_{label}_{stamp}_v{version}.gpkg"
         )
         export_intersections_gpkg(df_vtx, intersections_gpkg_path)
 
     if params.get("OUT_HTML_MAP", True) and not df_h.empty:
-        generate_html_map(df_h, df_v, df_g, df_vtx, os.path.join(state_out_dir, f"alignment_map_{state_fips}_{stamp}_v{version}.html"), params)
+        generate_html_map(df_h, df_v, df_g, df_vtx, os.path.join(state_out_dir, f"alignment_map_{label}_{stamp}_v{version}.html"), params)
     if params.get("OUT_DASHBOARD", True) and not df_h.empty:
-        generate_dashboard(df_h, df_v, df_g, df_health, os.path.join(state_out_dir, f"alignment_dashboard_{state_fips}_{stamp}_v{version}.html"), state_out_dir, state_fips=state_fips, df_vtx=df_vtx, params=params)
+        generate_dashboard(df_h, df_v, df_g, df_health, os.path.join(state_out_dir, f"alignment_dashboard_{label}_{stamp}_v{version}.html"), state_out_dir, state_fips=state_fips, df_vtx=df_vtx, params=params)
 
     # Structure span report
     if not df_vtx.empty and "Structure_Kind" in df_vtx.columns:
@@ -1906,9 +1915,10 @@ def _run_state_alignment(state_fips: str, out_dir: str, dem_dir: str, user_param
 
     if not df_vtx.empty and 'Available_Sight_Dist_Ft' in df_vtx.columns:
         total_pts = len(df_vtx)
-        blind_pts = (df_vtx['Available_Sight_Dist_Ft'] < 400).sum()
+        blind_pts = (df_vtx['Available_Sight_Dist_Ft'] < SIGHT_WARNING_FT).sum()
         pct_blind = (blind_pts / total_pts * 100) if total_pts > 0 else 0
-        logging.info(f"Safety Profile:   {pct_blind:.1f}% of the network has an Available Sight Distance under 400 ft.")
+        logging.info(f"Safety Profile:   {pct_blind:.1f}% of the network has an Available Sight Distance "
+                     f"under {SIGHT_WARNING_FT:.0f} ft.")
 
     if not df_h.empty and 'Transition_Type' in df_h.columns:
         spirals = (df_h['Transition_Type'] == 'Spiral').sum()
@@ -1943,6 +1953,17 @@ def main():
 
     user_params.update({"OUTPUT_DIR": args.outdir, "DEM_DIR": args.demdir})
     if args.state: user_params["STATE_FIPS"] = args.state
+
+    # A county run needs one State, and a valid county code.
+    try:
+        county = record_filter_args(user_params)["county_fips"]
+    except ValueError as e:
+        logging.error(str(e))
+        raise SystemExit(1)
+    state_given = str(user_params.get("STATE_FIPS", "")).strip().upper()
+    if county and (not state_given.isdigit() or state_given.zfill(2) == "00"):
+        logging.error(f"County {county} was selected without a State FIPS; enter the State as well.")
+        raise SystemExit(1)
 
     try:
         if args.input:
