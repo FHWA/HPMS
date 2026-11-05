@@ -2,7 +2,7 @@
 ## Technical Manual
 
 *Federal Highway Administration, Office of Highway Policy Information*
-*October 29, 2026*
+*November 5, 2026*
 
 ---
 
@@ -442,7 +442,7 @@ The calibration tool is not run from the GUI. It is run on its own when the HPMS
 HPMS records are read from one of two places:
 
 - **The U.S. DOT data portal.** The default source during development is the 2024 HPMS dataset at `https://datahub.transportation.gov/resource/42um-tgh5.json`, which is served through the Socrata Open Data API. RAT requests one State at a time. The facility type and functional system filters are applied by the server, so records that are not wanted are never downloaded. Records are requested 100,000 at a time and ordered by `shapeid`, the field that keeps the order in which the State submitted its geometry. A free Socrata app token is optional and reduces throttling on large downloads. Scripts run outside the GUI read the token from the `RAT_SOCRATA_TOKEN` environment variable. A request that fails for a temporary reason is tried up to six times in all, with increasing waits between tries.
-- **A local file.** A CSV file with the geometry as well-known text (WKT), a Shapefile, or a GeoJSON file. Shapefiles and GeoJSON files in another coordinate system are reprojected to longitude and latitude (EPSG:4326) when they are read. The State, facility type, and functional system filters are applied after the file is read, so each tool processes the same records as it would from the portal.
+- **A local file.** A CSV file with the geometry as well-known text (WKT), a Shapefile, or a GeoJSON file. Shapefiles and GeoJSON files in another coordinate system are reprojected to longitude and latitude (EPSG:4326) when they are read. The State, facility type, functional system, county, and ownership filters are applied after the file is read, so each tool processes the same records as it would from the portal.
 
 The scripts rename the source fields to a common set of names, listed in Table 2-1. Records with no geometry are dropped. Route identifiers are read as text, so leading zeros are kept.
 
@@ -457,10 +457,13 @@ The scripts rename the source fields to a common set of names, listed in Table 2
 | `facility_type` | `Facility_Type` | Selects which records are processed. Records with no value are processed only when selected, as type 2 (Section 2.2.1) |
 | `structure_type` | `Structure_Type` | Labels bridge (1) and tunnel (2) records |
 | `shapeid` | `ShapeId` | Order in which the State submitted the geometry |
-| `county_id` | `County_ID` | Federal Information Processing Standards (FIPS) county code; reported in the route ordering audit |
+| `county_id` | `County_ID` | Federal Information Processing Standards (FIPS) county code; selects the records of a county run and is reported in the route ordering audit |
+| `ownership` | `Ownership` | Owner of the road (HPMS Ownership codes); selects records when owners are chosen |
 | `line` | `WKT` | Line geometry in longitude and latitude |
 
 Some States leave the functional system blank on their local roads instead of coding them 7, and some also leave the facility type blank. Records with a blank functional system or facility type are processed only when the user selects them with the **Missing** box in the functional system or facility type filters (`FSYSTEM_INCLUDE_MISSING` and `FACILITY_TYPE_INCLUDE_MISSING`, both off by default). They are then processed as functional class 7 and facility type 2 (two-way roadway). Missouri also submits railroad lines with a blank functional system, so in Missouri (State code 29) records with a blank functional system are always dropped. The 4D output keeps both fields blank, as submitted (Section 8.5).
+
+A run can also be limited to one county and to some owners. The county (`COUNTY_FIPS`, the three-digit county code; blank by default for the whole State) needs a single State. On the portal it is matched with and without leading zeros and with the State prefix (for example `033`, `33` and `53033`), and in a local file five-digit State and county codes are reduced to the county part. The ownership filter (`OWNERSHIP_FILTER`, a list of HPMS Ownership codes such as 2 for County Highway Agency; empty by default, meaning every record) keeps the records of the listed owners, and records with no ownership only when `OWNERSHIP_INCLUDE_MISSING` is set. Both filters are applied by the server or after a local file is read, like the others, so every later step sees only those records. Routes that cross the county line, or that change owner, are cut there: a curve or grade that straddles the line is measured only on the part that is kept. The plan and profile tool applies the county and ownership filters to the route's own records, but not to the nearby lines it uses for cross sections and crossings (Chapter 7).
 
 #### 2.2.2 Facility Types
 
@@ -1420,6 +1423,8 @@ The class does not depend on any assumption about the road's speed. For analysts
 - `Speed_Ref_Source` is "HPMS SPEED_LIMIT" or "Default by FS".
 - `Meets_Speed_Ref` is True when the design speed supported is at least the reference speed.
 
+The speed limit is a sample data item in HPMS, so most records have none and take the default for their functional class. For a plan and profile run, the user can enter the speed limit of the section in the Unified GUI (`PP_SPEED_MPH`, blank by default). It must be from 15 to 80 mph, the range of Table 5-1. When a speed is entered, every vertical curve in the run takes it as `Speed_Ref_Mph`, with `Speed_Ref_Source` "User entry", in place of the HPMS speed limit and the default. The entered speed also sets the sight distance warning on the plan and profile sheets and dashboard (Section 5.8). The entered speed applies to plan and profile runs only; the alignment and 4D enrichment tools always use the HPMS speed limit or the default.
+
 ### 5.7 Grade Segments
 
 HPMS Item 45 classes the length of a section by percent grade, measured between vertical points of intersection. RAT divides each chunk into grade segments the same way. The break points are the start of the chunk, the VPI of every vertical curve in order, and the end of the chunk, with the smoothed profile elevation at the chunk ends and $z_{VPI}$ (Eq. 5.15) at each VPI. Each pair of consecutive break points is one grade segment, with grade
@@ -1473,7 +1478,7 @@ where:
 
 Points ahead are checked in order, and the available sight distance is the distance to the last visible point before the first point that is out of view, since stopping sight distance is the length of road ahead that stays continuously visible. If no point within 1,500 feet is out of view, the available sight distance is 1,500 feet. If the view is clear to the end of the chunk and the chunk ends less than 1,500 feet ahead, the sight distance is not known and is left blank.
 
-This measure uses the vertical profile only. It does not account for horizontal curves, roadside objects, or cut slopes that block the view on the inside of a curve. Where the road passes out of view over a crest and comes back into view farther on, the sight distance ends where it first passes out of view, so a dip hidden beyond a crest limits it. The plan and profile sheets and dashboards mark points with less than 400 feet of available sight distance.
+This measure uses the vertical profile only. It does not account for horizontal curves, roadside objects, or cut slopes that block the view on the inside of a curve. Where the road passes out of view over a crest and comes back into view farther on, the sight distance ends where it first passes out of view, so a dip hidden beyond a crest limits it. The plan and profile sheets and dashboards mark points where the available sight distance is less than a warning distance. When the user enters a speed limit for a plan and profile run (Section 5.6.3), the warning distance is the stopping sight distance for that speed, interpolated linearly in Table 5-1 (for example, 495 feet at 55 mph). Otherwise it is 400 feet (`SIGHT_WARNING_FT`), a fixed value not tied to the road's speed. The alignment tool's Run Log gives the share of the network under 400 feet.
 
 ### 5.9 Roughness Proxy
 
@@ -1815,7 +1820,7 @@ All lengths are in miles, rounded to 6 decimal places. For curves, the rest of t
 
 ### 8.5 Outputs
 
-The tool writes a CSV file of the records with all HPMS fields (or the fields the user selected) plus `WKT_ZM` and `Elevation_Source`. The functional system and facility type are written as submitted, so records processed with a blank value (Section 2.2.1) are blank in the output. It can also write a GeoPackage with 3D line geometry in longitude and latitude, and a Shapefile with the same records projected to a UTM zone chosen for the whole State, for 3D software such as Blender. Shapefile field names are limited to 10 characters, so longer names are shortened in that file only. In a run of all States, the GUI also merges the State files into one national CSV file.
+The tool writes a CSV file of the records with all HPMS fields (or the fields the user selected) plus `WKT_ZM` and `Elevation_Source`. The functional system and facility type are written as submitted, so records processed with a blank value (Section 2.2.1) are blank in the output. It can also write a GeoPackage with 3D line geometry in longitude and latitude, and a Shapefile with the same records projected to one UTM zone for the whole run, for 3D software such as Blender. The zone is the one containing the median position of the records, so a few records far from the rest (such as records coded to the wrong county) do not change it. Shapefile field names are limited to 10 characters, so longer names are shortened in that file only. In a run of all States, the GUI also merges the State files into one national CSV file.
 
 ---
 
@@ -1967,7 +1972,7 @@ This chapter describes each output of the processing tools. Appendix D lists the
 
 ### 10.1 File Names
 
-The alignment and 4D enrichment tools write each State's files to a folder `Output_State_XX` in the output folder, where `XX` is the State FIPS code. File names end in `_XX_YYYYMMDD_vN`, where `YYYYMMDD` is the run date and `vN` a version number that increases when a run is repeated on the same day, so earlier results are not overwritten (for example `alignment_horizontal_08_20261015_v1.csv`). A run on a local file with no State code uses `LOCAL` in place of the code.
+The alignment and 4D enrichment tools write each State's files to a folder `Output_State_XX` in the output folder, where `XX` is the State FIPS code; a county run (Section 2.2.1) uses `XX_County_CCC`, where `CCC` is the county code, in place of `XX` in the folder and file names. File names end in `_XX_YYYYMMDD_vN`, where `YYYYMMDD` is the run date and `vN` a version number that increases when a run is repeated on the same day, so earlier results are not overwritten (for example `alignment_horizontal_08_20261015_v1.csv`). A run on a local file with no State code uses `LOCAL` in place of the code.
 
 The version number is claimed when the run starts. The alignment tool creates its horizontal curve table, and the 4D enrichment tool its CSV file, under the first version number not yet taken, as an empty file that the run later replaces. A second run started on the same day, even while the first is still running, therefore gets the next number and cannot overwrite the first run's files. If a run ends without writing that file, the empty file is removed. If an alignment run writes its other files but finds no horizontal curves, the horizontal curve table is kept with a header line only.
 
@@ -2030,16 +2035,16 @@ Besides the tables above, the plan and profile tool writes:
 - **Cross-section tables**: one row per station with its measurements (Chapter 6), and the ground profile of each station every foot from 250 feet left to 250 feet right of the roadway centerline.
 - **Nearby lines**: the other HPMS lines near the route, with the crossing reference point and over/under label (Section 7.2).
 - **Run parameters** (JSON): the parameters the run used, read by the PDF tool for its cover page.
-- **Corridor analytics dashboard** (HTML): interactive charts along the route of the change in heading from point to point, the smoothed and raw elevation with points of available sight distance under 400 feet, and the roughness proxy against the HPMS IRI (on separate axes, since the two are on different scales).
+- **Corridor analytics dashboard** (HTML): interactive charts along the route of the change in heading from point to point, the smoothed and raw elevation with points of available sight distance under the warning distance (Section 5.8), and the roughness proxy against the HPMS IRI (on separate axes, since the two are on different scales).
 - **Calibration cross-check** (HTML): the route check described in Section 9.7.
 
 ### 10.10 Plan and Profile Sheets
 
 The PDF tool (`apps/rat_plan_profile_report_pdf.py`) makes landscape sheets from the plan and profile tables:
 
-- **Cover page**: route, reference point range, run date, number of sheets, all run parameters, and an overview map on a USGS topographic basemap.
+- **Cover page**: route, reference point range, run date, the speed limit entered (if any) and the sight distance warning distance, number of sheets, all run parameters, and an overview map on a USGS topographic basemap.
 - **Terrain pages** (when the DEM tiles are cached): a shaded-relief map of the whole route with reference point labels and bridge and tunnel spans, and, for routes longer than 6 miles, section pages of 5 miles each.
-- **Plan and profile sheets**, each covering 1,500 feet of road. The plan view is at true scale, with the route turned to run left to right, on shaded relief from the DEM. It shows the smoothed centerline and the HPMS line, horizontal curves with call-outs (class, smallest radius, deflection, length, measured superelevation, and begin and end reference points), reference point ticks every 100 feet, cross-section stations, the nearby HPMS lines, a north arrow, a scale bar, and a locator map on USGS aerial imagery. The profile view shows the smoothed and raw profiles, vertical curves with call-outs (type, class, K, length, grades, sight distance and supported speed, and begin and end reference points), and a band marking points with less than 400 feet of available sight distance. An optional strip under the profile gives the profile and ground elevations at a set interval.
+- **Plan and profile sheets**, each covering 1,500 feet of road. The plan view is at true scale, with the route turned to run left to right, on shaded relief from the DEM. It shows the smoothed centerline and the HPMS line, horizontal curves with call-outs (class, smallest radius, deflection, length, measured superelevation, and begin and end reference points), reference point ticks every 100 feet, cross-section stations, the nearby HPMS lines, a north arrow, a scale bar, and a locator map on USGS aerial imagery. The profile view shows the smoothed and raw profiles, vertical curves with call-outs (type, class, K, length, grades, sight distance and supported speed, and begin and end reference points), and a band marking points where the available sight distance is less than the warning distance (Section 5.8). An optional strip under the profile gives the profile and ground elevations at a set interval.
 - **Cross-section sheets**, four sections per sheet, at the same horizontal and vertical scale, each 500 feet wide and 50 feet tall. They show the ground, the lane slopes with arrows pointing downhill, foreslopes, the HPMS lines, and the measured superelevation of the curve each station belongs to.
 
 The options for these pages are in the CONFIGURATION block at the top of the PDF tool.
@@ -2111,7 +2116,8 @@ The methods were checked during development on runs of these routes, comparing t
 - the Pikes Peak Highway in Colorado, functional class 7, the full 18.2 miles from about 7,700 feet to about 14,100 feet elevation, with sustained grades near 10 percent, many switchbacks, and one bridge;
 - a local road (functional class 7) in Iowa, 1.9 miles of rural grid with five turns of about 90 degrees, smoothed at factors of 30, 100, and 150 to check the departure limit of the calibration (Section 9.4);
 - a statewide run of Alaska, functional classes 1 to 6, with a plan and profile run of the Seward Highway from Seward to beyond Moose Pass, where the DEM is coarse and the structure records decide which spans are kept (Section 5.2.3);
-- Badwater Road in Death Valley, California, functional class 5, reference points 10.5 to 48.4, nearly all below sea level (lowest point about 274 feet below), on a valley floor flat enough that the ground beside the road was at first taken for an opposing roadway (Section 6.2).
+- Badwater Road in Death Valley, California, functional class 5, reference points 10.5 to 48.4, nearly all below sea level (lowest point about 274 feet below), on a valley floor flat enough that the ground beside the road was at first taken for an opposing roadway (Section 6.2);
+- a county run of Snohomish County, Washington (all functional classes; alignment, 4D enrichment and plan and profile runs), the first test of the county and ownership filters (Section 2.2.1).
 
 ### Part B: Known Limitations
 
@@ -2119,6 +2125,7 @@ The methods were checked during development on runs of these routes, comparing t
 
 - **Position of the HPMS line.** RAT measures the line work as submitted. Where the line is off the road, for example on an old alignment after new construction, the curves and grades there describe the ground beside the road. The plan and profile tool flags such stretches from its cross sections and the roughness of the ground along the line (Section 6.10). The real case available for testing was the inventory line of the Parks Highway west of Wasilla, Alaska, which is off its roadway for several miles while the non-inventory line follows the new road. The same flags also mark a line that is in the right place on a road built after the elevation data were collected (Section 11.5). On the Parks Highway about 2 of those miles were not flagged, because the cross sections there found flat ground at the line (probably the old pavement) that the lane fit cannot tell from road. Where the line is off the road, the ground beside it also produces bridge and tunnel spans that are not there. The alignment tool has no cross sections and does not flag such stretches.
 - **Line off the road with no road found.** The flags of Section 6.10 depend on finding the road at a cross section or on rough ground along the line. Where the line lies on a smooth hillside beside the road and the cross sections find no road, neither test applies, and the stretch is not flagged. Two forest roads in Idaho with no functional class reported show this. The roads are narrow, so lanes were fitted at only about 5 percent of their stations, and in the DEM the road is a flat strip about 10 feet wide. On one of them, for about 12 miles, that strip was within 5 feet of the line at only 20 to 58 percent of the stations and 5 to 20 feet away at most of the rest, and the ground at the line sloped 20 to 57 percent. No station was flagged, and the 9 bridges found there from the DEM alone were most likely gullies beside the road. The second road showed the same pattern over most of its 10 miles, with 12 bridges found from the DEM alone. A test for a line on steep ground with no flat strip beside it flagged these stretches, but it also flagged about 9 miles of the Seward Highway, where the DEM is coarse and the road bench does not show. It is not used in this version (see the Roadmap).
+- **Line off the road at a bridge and curve.** On route 700002800I in Snohomish County, Washington, the HPMS line crosses a short bridge (an NBI record) at reference point 11.83 and then cuts across the inside of a sharp right curve, off the road from about reference point 11.84 to 11.97. Along that stretch the ground at the line climbs at 10 to 15 percent and then dips about 8 feet. Because the ground beyond the bridge kept climbing steeply, the bridge's far edge ran about 220 feet up the slope, and the bridge was not spanned despite the NBI record. The dip was spanned as a bridge from the DEM alone (3_DIP) that is not there, and the two curves in the stretch describe the line, not the road. The three cross sections in the stretch found no lanes at the line (or only ground sloping 9 percent), and one of them shows a flat strip at road level 110 to 130 feet to the side, about 30 feet below the ground at the line. They were not flagged because the station test of Section 6.10 also needs the centerline to fall well away from its usual offset, or a divided-road centerline method, and on a two-lane road the centerline is placed within about 15 feet of the line; this is the same gap as on the Idaho forest roads above (see the Roadmap).
 - **Direction of the records.** RAT assumes that a State's submitted order runs in the direction of increasing reference point (Section 2.3.4). This held on every route tested.
 - **Gaps in the line work.** Records whose ends are up to 100 feet apart are joined, and chunks whose ends are up to 500 feet apart are joined (Section 2.3). A real gap of that size becomes a straight piece of line and can cause a step in the profile.
 - **Reference points.** Reference points are interpolated in a straight line between the lowest and highest reference points of each chunk (Eq. 4.14). Where a State's reference points do not advance evenly along the line, positions are shifted. On a Nebraska test the HPMS bridge limits fell 0.04 to 0.05 mile past the bridges in the DEM.
@@ -2145,7 +2152,7 @@ The methods were checked during development on runs of these routes, comparing t
 #### 11.7 Vertical Curves, Grades, and Sight Distance
 
 - **Design speed supported.** The vertical curve class considers the vertical curve only. It does not consider horizontal curves, roadside objects, or cut slopes that limit sight distance, and it assumes a symmetric parabolic curve fitted to the smoothed profile.
-- **Available sight distance.** The available sight distance (Section 5.8) is measured only in the direction of increasing reference point, over the vertical profile only, up to 1,500 feet. The 400-foot warning on the sheets and dashboards is a fixed value, not tied to the road's speed. **Note:** The sight distance results should be treated as experimental and used with caution.
+- **Available sight distance.** The available sight distance (Section 5.8) is measured only in the direction of increasing reference point, over the vertical profile only, up to 1,500 feet. Unless the user enters a speed limit for a plan and profile run, the warning on the sheets and dashboards is a fixed 400 feet, not tied to the road's speed (Section 5.8). **Note:** The sight distance results should be treated as experimental and used with caution.
 - **Grade segments between close VPIs.** A short grade segment between two closely spaced VPIs reports the tangent grade, which can be steeper than the profile itself (Section 5.7). Short class F segments on mountain roads should be read with the vertex grades.
 - **Roughness proxy.** `Micro_Jitter_Inches` is a height in inches from the DEM residual, not an IRI value (Section 5.9). **Note:** The roughness proxy results should be treated as experimental and used with caution.
 
@@ -2357,6 +2364,7 @@ Table B-1 lists the parameters a user can change, with their defaults. "GUI" mea
 | `MAX_CHUNK_SPLIT_MILES` | 25 mi | GUI | Longest chunk processed as one task | 2.7 |
 | `CHUNK_SPLIT_PADDING_FT` | 20,000 ft | GUI | Extra line on each side of a split piece | 2.7 |
 | `LOG_FSYSTEM_DETAIL` | False | Core | List each chunk's functional class in the Run Log | 3.5.1 |
+| `PP_SPEED_MPH` | Blank | GUI | Speed limit for a plan and profile run (15 to 80 mph); sets the reference speed and the sight distance warning | 5.6.3, 5.8 |
 | `NEARBY_LINES_FROM_SOCRATA` | True | Plan/profile tool | Add nearby HPMS lines of every facility type from the data portal | 7.2.1 |
 | `MAX_UNENRICHED_PCT` | 5 % | 4D tool | Records left out above which the Run Log shows an error | 8.3 |
 | `MAX_4D_MISSING_PCT` | 5 % | Validator | Records missing from the 4D output above which the check fails | 11.1 |
@@ -2391,6 +2399,7 @@ Table B-2 lists fixed values in the code that a user would not normally change.
 | `VC_CLASS_MIN_SPEED_MPH` | A 70, B 60, C 50, D 40, E 30 mph | Vertical curve class limits | 5.6.2 |
 | `DEFAULT_SPEED_BY_FS_MPH` | 75, 65, 55, 45, 35, 30, 25 mph | Reference speed by functional class 1 to 7 | 5.6.3 |
 | Sight distance | 3.5 ft eye, 2.0 ft object, 1,500 ft | Available sight distance | 5.8 |
+| `SIGHT_WARNING_FT` | 400 ft | Sight distance warning where no speed limit is entered | 5.8 |
 | Roughness filter | 30 m cutoff and window | Roughness proxy | 5.9 |
 | Spiral test | 85 % of peak curvature, 150 ft | Spiral label | 4.4.2 |
 | Crossing search radius | 0.000045 degree | Network crossings | 7.1 |
