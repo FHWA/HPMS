@@ -106,6 +106,8 @@ The GUI collects the settings, saves them to `run_params.json` in the output fol
 | **State FIPS** | Two-digit State code (`53` for Washington, `11` for the District of Columbia). Leave blank, or enter `ALL`, to run every State. |
 | **Reload State Factors** | Entering a State FIPS code fills the horizontal smoothing factor fields with that State's calibrated values (or the national defaults where the State has none). This button fills them again after they have been edited. Statewide runs apply each State's factors automatically. |
 | **Socrata Token** | Optional app token (see 2.4). |
+| **County FIPS** | Optional. The three-digit county code (`033` for King County, Washington; `33` or the five-digit `53033` also work) limits the run to that county's records. Needs a State FIPS. Leave it blank to run the whole State. A route that crosses the county line is cut at the line, so a curve or grade that straddles it is measured only on the county's side. Outputs go to `Output_State_XX_County_CCC` (see 6). |
+| **Ownership** | Opens a list of the HPMS ownership codes with a box for each (for example, 2: County Highway Agency, 4: City or Municipal Highway Agency). Only records owned by the checked owners are processed; **Missing** adds records with no ownership reported. All boxes are checked by default ("All owners"), which processes every record. **Select All** and **Clear All** set every box; at least one owner must be checked. |
 | **Functional System Filters** | Functional classes to process. FS 1–6 are on by default; Local roads (FS 7) are off. **Missing** adds records with no functional system, processed as Local (FS 7); it is off by default. In Missouri these records are always left out, because they include railroad lines. At least one functional system must be selected. |
 | **Facility Type Filters** | HPMS facility types to process. The default, types 1 and 2, is mainline roadway only. **Missing** adds records with no facility type, processed as two-way roadway (2); it is off by default. At least one facility type must be selected. |
 
@@ -122,6 +124,8 @@ A local file must have a route identifier column and line geometry. Common HPMS 
 | Facility type | `facility_type`, `fac_type`, `facilitytype` |
 | Structure type | `structure_type`, `struct_typ` |
 | Shape ID | `shapeid`, `shape_id` |
+| County | `county_id`, `countyid`, `county` (needed for a County FIPS run) |
+| Ownership | `ownership`, `owner` (needed for an Ownership selection) |
 | Geometry (CSV) | `WKT`, `geometry`, `shape`, `the_geom`, `line` (well-known text) |
 
 Shapefiles and GeoJSON files in another coordinate system are reprojected to WGS 84 when read. Enter the State FIPS code for a local file whenever it is known; it selects the State's smoothing factors and bridge records. Without it, outputs are labeled `LOCAL` and national factors are used.
@@ -130,7 +134,7 @@ Shapefiles and GeoJSON files in another coordinate system are reprojected to WGS
 
 | Control | Use |
 | :--- | :--- |
-| **Output Directory** | Where results are written. Statewide outputs go to a subfolder `Output_State_XX`. |
+| **Output Directory** | Where results are written. Statewide outputs go to a subfolder `Output_State_XX`, and county runs to `Output_State_XX_County_CCC`. |
 | **DEM Directory** | Where elevation tiles are cached (default `elevation_cache` in the folder the GUI was started from). Keep this folder between runs: downloading tiles is the slowest part of a large run, and cached tiles are reused. The 1 m tiles are stored in its `align_1m_cache` subfolder. |
 
 ### 4.3 Output / Mode Selection
@@ -138,7 +142,7 @@ Shapefiles and GeoJSON files in another coordinate system are reprojected to WGS
 | Control | Use |
 | :--- | :--- |
 | **Run Alignment** | Statewide curve and grade analysis. |
-| **Run Plan/Profile** | One route, set by **Plan/Profile Route ID**. **Load Routes** fills the list from the selected input. **Begin RP** and **End RP** (miles) limit the run to part of the route; leave them blank for the whole route. |
+| **Run Plan/Profile** | One route, set by **Plan/Profile Route ID**. **Load Routes** fills the list from the selected input. **Begin RP** and **End RP** (miles) limit the run to part of the route; leave them blank for the whole route. **Speed Limit (mph)** is optional: enter the posted speed limit of the section (15–80 mph) to compare every vertical curve with it and to mark points where the available sight distance is less than the AASHTO stopping sight distance for that speed. Leave it blank to use the HPMS speed limit where reported, else the default for the functional class. It applies to Plan/Profile runs only. |
 | **Run 4D Enrichment** | Elevation and reference point on every HPMS vertex. **Customize Output Fields** chooses which HPMS fields are carried into the output. |
 | **Replace HPMS curve/grade classifications** | Available when Alignment and 4D Enrichment are both checked. The 4D output's CURVES_A–F and GRADES_A–F fields are filled from the RAT curve and grade tables instead of the values reported to HPMS. |
 
@@ -196,7 +200,7 @@ The defaults suit most work. Change one group at a time and check the effect on 
 
 1. Choose the input and enter the State FIPS code.
 2. Set the Output and DEM directories.
-3. Check **Run Plan/Profile** only, click **Load Routes**, and pick the route. Enter Begin and End RP to limit the section.
+3. Check **Run Plan/Profile** only, click **Load Routes**, and pick the route. Enter Begin and End RP to limit the section, and, if known, the section's speed limit.
 4. Under Output Formats, check **Plan/Profile PDF** and, if wanted, **Structure Span Report** and **Profile Elevations**.
 5. Click **Run Selected**.
 
@@ -204,7 +208,7 @@ A 20-mile Interstate section takes a few minutes once its elevation tiles are ca
 
 ### 5.2 One State: Alignment
 
-1. Choose the input and enter the State FIPS code.
+1. Choose the input and enter the State FIPS code. For one county, also enter its County FIPS code, and pick the owners under **Ownership** if only some roads are wanted (for example, county-owned roads only).
 2. Check **Run Alignment**.
 3. Choose the output formats.
 4. Click **Run Selected**.
@@ -223,7 +227,7 @@ Every run writes `run_params.json` to the output folder. The processing scripts 
 
 ## 6. Outputs
 
-`XX` is the State FIPS code, `YYYYMMDD` the run date, and `vN` a version number that increases when a run is repeated on the same day.
+`XX` is the State FIPS code, `YYYYMMDD` the run date, and `vN` a version number that increases when a run is repeated on the same day. A county run uses `XX_County_CCC` in place of `XX`, where `CCC` is the county FIPS code, in both the folder and the file names (for example, `Output_State_53_County_033/alignment_horizontal_53_County_033_20261105_v1.csv`), so county and statewide results are kept apart.
 
 ### 6.1 Alignment (`Output_State_XX/`)
 
@@ -283,7 +287,7 @@ Every A–F scale runs from A (mildest) to F (most severe).
 | Grade (`Grade_Bin`) | Percent grade, HPMS Item 45 | < 0.5 | 0.5–2.4 | 2.5–4.4 | 4.5–6.4 | 6.5–8.4 | ≥ 8.5 |
 | Vertical curve (`VC_Class`) | Design speed supported by stopping sight distance (mph) | ≥ 70 | 60–65 | 50–55 | 40–45 | 30–35 | ≤ 25 |
 
-Vertical curves are classed with the AASHTO stopping sight distance model: a 3.5 ft eye height and 2.0 ft object over crests, and 2.0 ft headlights with a 1° beam on sags. `SSD_Provided_Ft` is blank where the curve does not limit sight distance. `Speed_Ref_Mph` is the HPMS speed limit at the curve, or a default by functional system where none is reported, and `Meets_Speed_Ref` compares it with the supported design speed. The comparison does not change the class.
+Vertical curves are classed with the AASHTO stopping sight distance model: a 3.5 ft eye height and 2.0 ft object over crests, and 2.0 ft headlights with a 1° beam on sags. `SSD_Provided_Ft` is blank where the curve does not limit sight distance. `Speed_Ref_Mph` is the HPMS speed limit at the curve, or a default by functional class where none is reported, and `Meets_Speed_Ref` compares it with the supported design speed. In a Plan/Profile run with a speed limit entered, every curve uses the entered speed instead (`Speed_Ref_Source` = User entry). The comparison does not change the class.
 
 ### 7.2 Positions
 
@@ -308,11 +312,11 @@ The Structure Span Report lists each span with its reference point limits, lengt
 | `False_Valley_Warning` | Vertical curves | A sag curve lies on a bridge span. It may be real (a bridge in a valley) or a sign that the span was not fully repaired. Check the profile sheet. |
 | `Line_Off_Road` | Plan/Profile tables and cross sections | Two or more cross sections in a row find no pavement at the HPMS line, and the road centerline far from it. The line probably follows an old alignment, or the road was rebuilt on a new alignment after the elevation data were collected (as on I-80 at Council Bluffs, Iowa). Curves and grades there describe the ground in the elevation model, not the road; check the line against current imagery. The log gives the reference point range and the PDF marks the stretch "LINE OFF ROAD?". |
 | Unknown Clearance | Intersections | Two routes cross with 5–10 ft of elevation difference: not clearly at grade or grade-separated. |
-| Sight distance under 400 ft | Plan/Profile sheets and dashboards | Points where available sight distance is under a fixed 400 ft. |
+| Sight distance warning | Plan/Profile sheets and dashboards | Points where available sight distance is under the AASHTO stopping sight distance for the speed limit entered (for example, 495 ft at 55 mph), or under 400 ft if no speed limit was entered. The cover page gives the distance used. |
 
 ### 7.6 Plan and profile sheets
 
-The PDF opens with a cover page listing the route, reference point range, run date and every parameter the run used, with an overview map. When the 1 m tiles are cached, a shaded-relief terrain overview follows, with section pages for long routes.
+The PDF opens with a cover page listing the route, reference point range, run date, the speed limit entered (if any) with the sight distance warning distance, and every parameter the run used, with an overview map. When the 1 m tiles are cached, a shaded-relief terrain overview follows, with section pages for long routes.
 
 Each sheet covers 1,500 ft of road:
 
@@ -368,6 +372,7 @@ Re-runs the bridge and tunnel detection on existing plan/profile vertex files. I
 | A route breaks into several `Part` values | The HPMS line work has gaps. Each piece is processed separately. |
 | Too many short horizontal curves | Raise the H Smooth Factor for that functional system, or H Min Delta or H Min Curve Length, and check on a known route. |
 | A bridge dip remains in a profile | See the bridge settings in Advanced Settings and the Technical Manual. `tools/rat_structure_span_check.py` tries other settings quickly. |
+| A "Speed Limit" message when a Plan/Profile run starts | The Speed Limit box holds text, or a speed outside the AASHTO stopping sight distance table (15–80 mph). Enter a speed from 15 to 80 mph, or clear the box. |
 | A run stops partway | Check the Run Log for the last State or route. Rerun that State; cached elevation tiles are reused. |
 | "Plan/Profile PDF failed. Exit code 1" (the Run Log ends with "PermissionError: [Errno 13] Permission denied" and the PDF path) | Check to see if the PDF from a previous run for that route is still open. |
 
