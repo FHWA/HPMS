@@ -25,7 +25,7 @@ calculus-based curvature analysis (kappa), and KDTree spatial indexing for
 4D geometry generation.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, November 5, 2026
+VERSION: 3.3, November 6, 2026
 """
 from typing import Dict, List, Tuple, Optional
 import math
@@ -1278,6 +1278,44 @@ def record_filter_args(p: dict) -> dict:
         "ownership_filter": [int(v) for v in (p.get("OWNERSHIP_FILTER") or [])],
         "include_missing_ownership": bool(p.get("OWNERSHIP_INCLUDE_MISSING", False)),
     }
+
+
+def record_filter_rows(p: dict, include_fsystem: bool = True) -> list:
+    """
+    (label, value) rows describing which HPMS records a run processes, from
+    its parameters: county, facility types, functional systems and owners.
+    Used for the Run Log and for the run-parameter panels and PDF cover page
+    (core.rat_param_summary). include_fsystem=False leaves out the
+    functional system row, for plan and profile runs, where the route is
+    chosen by its ID and its functional system is not filtered.
+    """
+    def codes(vals):
+        return ", ".join(str(int(float(v))) for v in vals)
+
+    rows = []
+    try:
+        county = normalize_county_fips(p.get("COUNTY_FIPS"), p.get("STATE_FIPS"))
+    except ValueError:
+        county = str(p.get("COUNTY_FIPS"))
+    rows.append(("County FIPS", county or "All"))
+    facility = p.get("FACILITY_TYPE_FILTER") or [1, 2]
+    rows.append(("Facility Types", codes(facility)
+                 + (" and missing" if p.get("FACILITY_TYPE_INCLUDE_MISSING") else "")))
+    if include_fsystem:
+        fsystem = p.get("FSYSTEM_FILTER") or []
+        rows.append(("Functional Systems", (codes(fsystem) if fsystem else "All")
+                     + (" and missing" if p.get("FSYSTEM_INCLUDE_MISSING") else "")))
+    owners = [int(float(v)) for v in (p.get("OWNERSHIP_FILTER") or [])]
+    if not owners:
+        owner_text = "All owners"
+    elif len(owners) <= 2:
+        owner_text = "; ".join(f"{c} {OWNERSHIP_CODES.get(c, '')}".strip() for c in owners)
+    else:
+        owner_text = codes(owners)
+    if owners and p.get("OWNERSHIP_INCLUDE_MISSING"):
+        owner_text += " and missing"
+    rows.append(("Ownership", owner_text))
+    return rows
 
 
 def describe_record_filters(facility_filter=None, fsystem_filter=None, county_fips=None,

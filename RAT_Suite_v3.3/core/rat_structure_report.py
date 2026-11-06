@@ -28,7 +28,7 @@ serves rat_plan_profile_cli.py, rat_alignment_cli.py (CSV only) and
 tools/rat_structure_span_check.py.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, October 29, 2026
+VERSION: 3.3, November 6, 2026
 """
 import math
 import logging
@@ -160,7 +160,7 @@ def render_structure_span_pdf(vtx: pd.DataFrame, spans: pd.DataFrame, pdf_path: 
             fig = plt.figure(figsize=(17, 11))
             head = (f"{title}  " if title else "") + \
                 f"Route {sp['RouteId']} -- {sp['Kind']} ({sp['Source_Tier']})   " \
-                f"MP {sp['Start_MP']:.3f} - {sp['End_MP']:.3f}"
+                f"RP {sp['Start_MP']:.3f} - {sp['End_MP']:.3f}"
             fig.text(0.04, 0.95, head, fontsize=15, fontweight="bold")
             detail = (f"Span {sp['Span_Ft']:.0f} ft    Ends {sp['Z_Start_Ft']:.2f} -> {sp['Z_End_Ft']:.2f} ft    "
                       f"Grade {sp['Span_Grade_Pct']:+.2f}%    Max raw DEM departure {sp['Max_Raw_Departure_Ft']:.1f} ft")
@@ -174,7 +174,7 @@ def render_structure_span_pdf(vtx: pd.DataFrame, spans: pd.DataFrame, pdf_path: 
             ax_p.plot(mp[idx], vtx["Elev_Raw_Ft"].to_numpy()[idx], ".", color="#c0392b", ms=2.5, label="Raw 1 m DEM")
             ax_p.plot(mp[idx], vtx["Elev_Ft"].to_numpy()[idx], "-", color="#7f8c8d", lw=1.5, label=profile_label)
             ax_p.plot(mp[a:b + 1], vtx["Elev_Ft"].to_numpy()[a:b + 1], "-", color="#1f4e9c", lw=3, label="Structure span")
-            ax_p.set_xlabel("Milepost")
+            ax_p.set_xlabel("Reference Point")
             ax_p.set_ylabel("Elevation (ft)")
             ax_p.set_title("Profile", fontweight="bold")
             ax_p.grid(alpha=0.3)

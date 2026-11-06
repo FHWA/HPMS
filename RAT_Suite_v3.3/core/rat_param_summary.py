@@ -34,7 +34,7 @@ Both rat_alignment_cli.py and rat_plan_profile_cli.py use these, so every
 output shows the run parameters in the same format.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, October 29, 2026
+VERSION: 3.3, November 6, 2026
 """
 import datetime
 import html as _html_mod
@@ -42,6 +42,8 @@ import json
 import logging
 import os
 from typing import Dict, Optional
+
+from core.rat_core import record_filter_rows
 
 # --- Core parameters: always visible in the panel/cover page. ---
 CORE_PARAM_SPECS = [
@@ -103,6 +105,9 @@ def build_run_param_summary(
     mp_start: Optional[float] = None,
     mp_end: Optional[float] = None,
     run_date: Optional[str] = None,
+    include_fsystem: bool = True,
+    speed_mph: Optional[float] = None,
+    sight_warning_ft: Optional[float] = None,
 ) -> Dict:
     """
     Builds a display-ready summary of the parameters a run actually used.
@@ -113,8 +118,15 @@ def build_run_param_summary(
     from the GUI or a CLI, so it records what ran rather than what was
     requested.
 
+    include_fsystem=False leaves the functional system out of the records
+    list (plan and profile runs choose the route by its ID). sight_warning_ft
+    (plan and profile runs) adds the speed limit entered, or None, and the
+    sight distance warning distance to identity.
+
     Returns a dict with:
         identity      -- route/state id, MP range, run date/time
+        filters       -- list of {label, value}: county, facility types,
+                         functional systems and owners processed
         core          -- list of {key, label, value} for CORE_PARAM_SPECS
         fs_overrides  -- list of {fs, h} for the FS2-FS7 horizontal smoothing
                          factors present in params (the vertical factor is
@@ -144,8 +156,15 @@ def build_run_param_summary(
         "mp_start": mp_start,
         "mp_end": mp_end,
     }
+    if sight_warning_ft is not None:
+        identity["speed_mph"] = speed_mph
+        identity["sight_warning_ft"] = sight_warning_ft
 
-    return {"identity": identity, "core": core, "fs_overrides": fs_overrides, "advanced": advanced}
+    filters = [{"label": label, "value": value}
+               for label, value in record_filter_rows(params, include_fsystem=include_fsystem)]
+
+    return {"identity": identity, "filters": filters, "core": core,
+            "fs_overrides": fs_overrides, "advanced": advanced}
 
 
 def save_run_param_summary_json(summary: Dict, out_path: str) -> None:
@@ -206,12 +225,18 @@ def render_param_panel_html(summary: Dict, panel_id: str = "rat-params-panel") -
     if ident.get("mp_start") is not None and ident.get("mp_end") is not None:
         try:
             id_lines.append(
-                f"<div><b>MP Range:</b> {float(ident['mp_start']):.3f} - {float(ident['mp_end']):.3f}</div>"
+                f"<div><b>RP Range:</b> {float(ident['mp_start']):.3f} - {float(ident['mp_end']):.3f}</div>"
             )
         except (TypeError, ValueError):
             pass
     if ident.get("run_date"):
         id_lines.append(f"<div><b>Run Date:</b> {esc(str(ident['run_date']))}</div>")
+    if ident.get("sight_warning_ft") is not None:
+        speed = ident.get("speed_mph")
+        warn = float(ident["sight_warning_ft"])
+        speed_text = (f"{float(speed):g} mph (entered); sight warning under {warn:.0f} ft" if speed is not None
+                      else f"not entered; sight warning under {warn:.0f} ft")
+        id_lines.append(f"<div><b>Speed Limit:</b> {esc(speed_text)}</div>")
     identity_html = "\n".join(id_lines)
 
     def _rows(items):
@@ -222,6 +247,14 @@ def render_param_panel_html(summary: Dict, panel_id: str = "rat-params-panel") -
         )
 
     core_rows_html = _rows(summary.get("core", []))
+
+    filters_html = ""
+    if summary.get("filters"):
+        filters_html = f"""
+    <div style="margin-top:8px; font-weight:bold; color:#2c3e50;">Records Processed</div>
+    <table style="border-collapse:collapse; font-size:11px;">
+      {_rows(summary["filters"])}
+    </table>"""
 
     fs_html = ""
     fs_overrides = summary.get("fs_overrides", [])
@@ -253,6 +286,7 @@ def render_param_panel_html(summary: Dict, panel_id: str = "rat-params-panel") -
        padding: 10px 12px; margin-top:4px; max-width: 340px; max-height: 420px; overflow-y:auto;
        box-shadow: 0 2px 6px rgba(0,0,0,0.3);">
     {identity_html}
+    {filters_html}
     <div style="margin-top:8px; font-weight:bold; color:#2c3e50;">Core Parameters</div>
     <table style="border-collapse:collapse; font-size:11px;">
       {core_rows_html}
