@@ -36,7 +36,7 @@ Run by the Unified GUI after an alignment run, or from the command line with
 the file arguments below. Writes qa_validation_report.txt beside the files.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, October 29, 2026
+VERSION: 3.3, November 5, 2026
 """
 import os
 import re
@@ -368,13 +368,16 @@ def main():
     
     if not out_dir: out_dir = os.getcwd()
 
-    # Named after the files checked (state, date and version), e.g.
-    # alignment_horizontal_10_20261015_v1.csv -> qa_validation_report_10_20261015_v1.txt,
-    # so a rerun does not overwrite an earlier report.
+    # Named after the files checked (State or State and county, date and
+    # version), e.g. alignment_horizontal_10_20261015_v1.csv ->
+    # qa_validation_report_10_20261015_v1.txt and
+    # alignment_horizontal_53_County_033_20261105_v1.csv ->
+    # qa_validation_report_53_County_033_20261105_v1.txt, so a rerun does
+    # not overwrite an earlier report.
     report_name = "qa_validation_report.txt"
     for path in (args.horizontal_csv, args.vertical_csv, args.grades_csv,
                  args.vertices_csv, args.scores_csv, args.enriched_csv):
-        m = re.search(r"_([A-Za-z0-9]+_\d{8}_v\d+)\.csv$", os.path.basename(path or ""))
+        m = re.search(r"_([A-Za-z0-9]+(?:_County_\d{3})?_\d{8}_v\d+)\.csv$", os.path.basename(path or ""))
         if m:
             report_name = f"qa_validation_report_{m.group(1)}.txt"
             break
