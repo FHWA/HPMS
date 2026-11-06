@@ -1,4 +1,4 @@
-NBI folder
+**NBI folder**
 
 The RAT Suite reads bridge and tunnel locations from the National Bridge
 Inventory (NBI) and National Tunnel Inventory (NTI) files in this folder.
