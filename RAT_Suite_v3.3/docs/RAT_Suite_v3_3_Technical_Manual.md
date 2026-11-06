@@ -2018,7 +2018,7 @@ With the **Structure Span Report** option, both tools write a table with one row
 
 The alignment tool writes three interactive HTML maps on a light gray basemap:
 
-- **Curves** (`alignment_map_*.html`): horizontal curves colored by class, with compound curves dashed, and vertical curves colored by vertical curve class. Hovering over a curve shows its main values.
+- **Curves** (`alignment_map_*.html`): horizontal curves colored by class, with compound curves dashed, and vertical curves colored by vertical curve class. Hovering over a horizontal curve shows its reference points, class, radius and smallest radius (feet), deflection angle, direction, length, transition (simple or spiral) and curve type (simple or compound). Hovering over a vertical curve shows its reference points, type, class, length, entering and leaving grades, algebraic difference, K value, design speed supported and sight distance provided. The map holds only these values; the full tables are in the CSV, GeoJSON and GeoPackage files (Appendix D).
 - **Grades** (`*_grades.html`): grade segments colored by signed grade, in reds for rising grades and blues for falling grades, darker for steeper classes, with class A in gray.
 - **Crossings** (`*_intersections.html`): one marker for each pair of crossing routes, in separate layers for at-grade crossings, grade-separated crossings, and crossings of unknown clearance.
 

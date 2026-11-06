@@ -246,6 +246,8 @@ Every run writes `run_params.json` to the output folder. The processing scripts 
 | `alignment_dashboard_XX_…html` and `chart_*.png` | Summary dashboard. |
 | `qa_validation_report_XX_YYYYMMDD_vN.txt` | Validator report, named after the files it checked. |
 
+The horizontal curve table gives each curve's reference point limits (`Calibrated_Start_MP`, `Calibrated_End_MP`), radius (`Radius_ft`), deflection angle (`Delta`, degrees), length (`Length_ft`), direction (`Dir`) and class (`Bin`). The vertical curve table gives the entering and leaving grades, K value, sight distance provided and vertical curve class of each curve, and the grades table the percent grade and class of each segment. The GeoJSON and GeoPackage copies have the same columns with each curve's or segment's line, for use in GIS, and the curves map shows the main values when the pointer is over a curve. The 4D output (6.3) has one row per HPMS section and carries only the section's CURVES_A–F and GRADES_A–F lengths. Superelevation is measured only in Plan/Profile runs (6.2). Every column is listed in Appendix D of the Technical Manual.
+
 ### 6.2 Plan/Profile (output folder)
 
 All files share the name `plan_profile_<route>_MP_<begin>_to_<end>`:
@@ -261,6 +263,8 @@ All files share the name `plan_profile_<route>_MP_<begin>_to_<end>`:
 | `_calibration_dashboard.html` | A check of the horizontal smoothing factor on this route's own sample. Informational only. |
 | `_run_parameters.json` | The parameters the run used. |
 | `.pdf` | Plan and profile sheets. |
+
+`_horizontal.csv` has the same curve measurements as the alignment curve table, plus the curve number used on the sheets, the measured superelevation (`Superelevation_Meas_Pct`, with `Superelevation_Note` = NC for normal crown) and the reference points where full superelevation begins and ends (`Super_Full_Start_MP`, `Super_Full_End_MP`).
 
 ### 6.3 4D Enrichment (`Output_State_XX/`)
 
