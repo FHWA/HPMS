@@ -585,6 +585,67 @@ def _save_map_if_under_limit(m, out_path: str, max_size_mb: float, map_label: st
         return False
 
 
+# Curve map tooltips: (column, label, decimals). Decimals None shows the
+# value as text. Radius and length are in feet, as on the plan and profile
+# sheets. Columns missing from a table are left out of its tooltip.
+H_TOOLTIP_FIELDS = [
+    ("RouteId", "Route", None),
+    ("Calibrated_Start_MP", "Start RP", 3),
+    ("Calibrated_End_MP", "End RP", 3),
+    ("Bin", "Curve Class", None),
+    ("Radius_ft", "Radius (ft)", 0),
+    ("Min_Radius_ft", "Min Radius (ft)", 0),
+    ("Delta", "Delta (deg)", 1),
+    ("Dir", "Direction", None),
+    ("Length_ft", "Length (ft)", 0),
+    ("Transition_Type", "Transition", None),
+    ("Merge_Status", "Curve Type", None),
+]
+V_TOOLTIP_FIELDS = [
+    ("RouteId", "Route", None),
+    ("Calibrated_Start_MP", "Start RP", 3),
+    ("Calibrated_End_MP", "End RP", 3),
+    ("Type", "Type", None),
+    ("VC_Class", "Vertical Curve Class", None),
+    ("Length_ft", "Length (ft)", 0),
+    ("Grade_In", "Grade In (%)", 2),
+    ("Grade_Out", "Grade Out (%)", 2),
+    ("Alg_Diff", "Algebraic Difference (%)", 2),
+    ("K_Value", "K (ft/%)", 1),
+    ("Design_Speed_Supported_Mph", "Design Speed Supported (mph)", 0),
+    ("SSD_Provided_Ft", "Sight Distance Provided (ft)", 0),
+]
+
+
+def _tooltip_layer(gdf, fields, style_cols):
+    """Return the columns a curve map layer needs: the style columns, the
+    tooltip fields as display text (prefixed "Tip_" so they do not replace
+    the style columns), and the geometry. Writing only these keeps the map
+    file small; the full tables are in the CSV, GeoJSON and GeoPackage files.
+    Min_Radius_ft is made from Min_Radius_m. Blank values show as "-"."""
+    src = gdf.copy()
+    if "Min_Radius_m" in src.columns:
+        src["Min_Radius_ft"] = pd.to_numeric(src["Min_Radius_m"], errors="coerce") * FEET_PER_METER
+    out = gpd.GeoDataFrame(src[[c for c in style_cols if c in src.columns]].copy(),
+                           geometry=src.geometry, crs=src.crs)
+    for col, _, dec in fields:
+        if col not in src.columns:
+            continue
+        if dec is None:
+            out["Tip_" + col] = src[col].fillna("-").astype(str)
+        else:
+            v = pd.to_numeric(src[col], errors="coerce")
+            out["Tip_" + col] = [f"{x:,.{dec}f}" if pd.notna(x) else "-" for x in v]
+    return out
+
+
+def _tooltip(gdf, fields):
+    """GeoJsonTooltip for a layer made by _tooltip_layer."""
+    present = [(col, label) for col, label, _ in fields if "Tip_" + col in gdf.columns]
+    return folium.GeoJsonTooltip(fields=["Tip_" + c for c, _ in present],
+                                 aliases=[label for _, label in present])
+
+
 def generate_html_map(df_h, df_v, df_g, df_vtx, out_html, params):
     """
     Generates three separate HTML map files instead of one combined map:
@@ -672,13 +733,14 @@ def generate_html_map(df_h, df_v, df_g, df_vtx, out_html, params):
         if params.get("SIMPLIFY_GEOMETRY", True):
             gdf_h["geometry"] = gdf_h["geometry"].simplify(tolerance=0.00005, preserve_topology=True)
         bounds_list.append(gdf_h.total_bounds)
+        gdf_h = _tooltip_layer(gdf_h, H_TOOLTIP_FIELDS, ["Bin", "Merge_Status"])
         folium.GeoJson(
             gdf_h, name="Horizontal Curves",
             style_function=lambda f: {
                 "color": color_map.get(f['properties'].get('Bin', 'A'), 'gray'),
                 "weight": 4, "dashArray": '10, 10' if f['properties'].get('Merge_Status') == 'Compound' else ''
             },
-            tooltip=folium.GeoJsonTooltip(fields=[c for c in ["RouteId", "Calibrated_Start_MP", "Calibrated_End_MP", "Bin", "Radius_m", "Delta", "Merge_Status"] if c in gdf_h.columns])
+            tooltip=_tooltip(gdf_h, H_TOOLTIP_FIELDS)
         ).add_to(m_curves)
 
     if not df_v.empty and "geometry" in df_v.columns:
@@ -686,10 +748,11 @@ def generate_html_map(df_h, df_v, df_g, df_vtx, out_html, params):
         if params.get("SIMPLIFY_GEOMETRY", True):
             gdf_v["geometry"] = gdf_v["geometry"].simplify(tolerance=0.00005, preserve_topology=True)
         bounds_list.append(gdf_v.total_bounds)
+        gdf_v = _tooltip_layer(gdf_v, V_TOOLTIP_FIELDS, ["VC_Class"])
         folium.GeoJson(
             gdf_v, name="Vertical Curves",
             style_function=lambda f: {"color": color_map.get(f['properties'].get('VC_Class', 'A'), 'gray'), "weight": 4},
-            tooltip=folium.GeoJsonTooltip(fields=[c for c in ["RouteId", "Calibrated_Start_MP", "Calibrated_End_MP", "Type", "VC_Class", "Design_Speed_Supported_Mph", "SSD_Provided_Ft", "K_Value", "Alg_Diff"] if c in gdf_v.columns])
+            tooltip=_tooltip(gdf_v, V_TOOLTIP_FIELDS)
         ).add_to(m_curves)
 
     if bounds_list:
