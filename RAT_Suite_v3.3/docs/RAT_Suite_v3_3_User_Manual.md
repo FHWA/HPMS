@@ -87,7 +87,7 @@ The HPMS data are downloaded from the U.S. DOT data portal (Socrata). The 2024 H
   python apps/rat_unified_gui.py
   ```
 
-When the GUI opens it looks for the settings from the last run in `output/run_params.json` under the suite folder. If it finds the file, it restores those settings and lists in the Run Log any that differ from the current defaults. If a saved value is a default from an earlier version, it offers to update it. Settings saved anywhere else can be loaded with **Load Config**.
+When the GUI opens it looks for the settings from the last run in `output/run_params.json` under the suite folder. If it finds the file, it restores those settings and lists in the Run Log any that differ from the current defaults. County FIPS, Ownership and the Plan/Profile Speed Limit are restored too; when any is set, the Run Log says so, since a whole-State run or a run on another road needs them cleared. If a saved value is a default from an earlier version, it offers to update it. Settings saved anywhere else can be loaded with **Load Config**.
 
 ---
 
@@ -221,7 +221,7 @@ Leave State FIPS blank, or enter `ALL`. Each State is downloaded and processed i
 
 ### 5.4 Settings files
 
-Every run writes `run_params.json` to the output folder. The processing scripts read their settings from it, and it records what a run used. Runs also write their parameters onto the maps, dashboards and PDF cover pages.
+Every run writes `run_params.json` to the output folder. The processing scripts read their settings from it, and it records what a run used. Runs also write the records processed (county, facility types, functional systems and owners) and their parameters onto the maps, dashboards and PDF cover pages, and give the records processed in the Run Log.
 
 ---
 
@@ -316,7 +316,7 @@ The Structure Span Report lists each span with its reference point limits, lengt
 
 ### 7.6 Plan and profile sheets
 
-The PDF opens with a cover page listing the route, reference point range, run date, the speed limit entered (if any) with the sight distance warning distance, and every parameter the run used, with an overview map. When the 1 m tiles are cached, a shaded-relief terrain overview follows, with section pages for long routes.
+The PDF opens with a cover page listing the route, reference point range, run date, the speed limit entered (if any) with the sight distance warning distance, the records processed (county, facility types and owners), and every parameter the run used, with an overview map. When the 1 m tiles are cached, a shaded-relief terrain overview follows, with section pages for long routes.
 
 Each sheet covers 1,500 ft of road:
 
@@ -373,6 +373,8 @@ Re-runs the bridge and tunnel detection on existing plan/profile vertex files. I
 | Too many short horizontal curves | Raise the H Smooth Factor for that functional system, or H Min Delta or H Min Curve Length, and check on a known route. |
 | A bridge dip remains in a profile | See the bridge settings in Advanced Settings and the Technical Manual. `tools/rat_structure_span_check.py` tries other settings quickly. |
 | A "Speed Limit" message when a Plan/Profile run starts | The Speed Limit box holds text, or a speed outside the AASHTO stopping sight distance table (15–80 mph). Enter a speed from 15 to 80 mph, or clear the box. |
+| A "County FIPS" message when a run starts | The County FIPS box holds text or a code that is not a county of the State entered, or no State FIPS is entered. Enter the three-digit county code and the State FIPS, or clear County FIPS. |
+| "No records found for State FIPS XX, county CCC" | The data portal has no records for that county with the filters chosen. Check the county code (the county part of the FIPS code, e.g. 033 for King County, Washington) and the Ownership and filter boxes. |
 | A run stops partway | Check the Run Log for the last State or route. Rerun that State; cached elevation tiles are reused. |
 | "Plan/Profile PDF failed. Exit code 1" (the Run Log ends with "PermissionError: [Errno 13] Permission denied" and the PDF path) | Check to see if the PDF from a previous run for that route is still open. |
 

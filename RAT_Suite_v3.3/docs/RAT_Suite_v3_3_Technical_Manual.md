@@ -2,7 +2,7 @@
 ## Technical Manual
 
 *Federal Highway Administration, Office of Highway Policy Information*
-*November 5, 2026*
+*November 6, 2026*
 
 ---
 
@@ -2022,7 +2022,7 @@ The alignment tool writes three interactive HTML maps on a light gray basemap:
 - **Grades** (`*_grades.html`): grade segments colored by signed grade, in reds for rising grades and blues for falling grades, darker for steeper classes, with class A in gray.
 - **Crossings** (`*_intersections.html`): one marker for each pair of crossing routes, in separate layers for at-grade crossings, grade-separated crossings, and crossings of unknown clearance.
 
-Each map has a panel listing the run's parameters. Lines are simplified (to about 5 meters) so that maps of large States open in a browser; the GeoJSON and GeoPackage files keep full detail. A map larger than 500 MB is not written, and the Run Log says so; the same data are in the tables and spatial files.
+Each map has a panel listing the records processed (county, facility types, functional systems and owners) and the run's parameters. Lines are simplified (to about 5 meters) so that maps of large States open in a browser; the GeoJSON and GeoPackage files keep full detail. A map larger than 500 MB is not written, and the Run Log says so; the same data are in the tables and spatial files.
 
 ### 10.8 Statewide Dashboard
 
@@ -2042,7 +2042,7 @@ Besides the tables above, the plan and profile tool writes:
 
 The PDF tool (`apps/rat_plan_profile_report_pdf.py`) makes landscape sheets from the plan and profile tables:
 
-- **Cover page**: route, reference point range, run date, the speed limit entered (if any) and the sight distance warning distance, number of sheets, all run parameters, and an overview map on a USGS topographic basemap.
+- **Cover page**: route, reference point range, run date, the speed limit entered (if any) and the sight distance warning distance, number of sheets, the records processed (county, facility types and owners), all run parameters, and an overview map on a USGS topographic basemap.
 - **Terrain pages** (when the DEM tiles are cached): a shaded-relief map of the whole route with reference point labels and bridge and tunnel spans, and, for routes longer than 6 miles, section pages of 5 miles each.
 - **Plan and profile sheets**, each covering 1,500 feet of road. The plan view is at true scale, with the route turned to run left to right, on shaded relief from the DEM. It shows the smoothed centerline and the HPMS line, horizontal curves with call-outs (class, smallest radius, deflection, length, measured superelevation, and begin and end reference points), reference point ticks every 100 feet, cross-section stations, the nearby HPMS lines, a north arrow, a scale bar, and a locator map on USGS aerial imagery. The profile view shows the smoothed and raw profiles, vertical curves with call-outs (type, class, K, length, grades, sight distance and supported speed, and begin and end reference points), and a band marking points where the available sight distance is less than the warning distance (Section 5.8). An optional strip under the profile gives the profile and ground elevations at a set interval.
 - **Cross-section sheets**, four sections per sheet, at the same horizontal and vertical scale, each 500 feet wide and 50 feet tall. They show the ground, the lane slopes with arrows pointing downhill, foreslopes, the HPMS lines, and the measured superelevation of the curve each station belongs to.
@@ -2055,7 +2055,7 @@ The 4D enrichment outputs are described in Section 8.5.
 
 ### 10.12 Logs and Reports
 
-- **Run Log**: the GUI shows the progress of each run and saves everything it shows to `Run_Log_<state>_<date>_v<n>.txt` in the State's output folder (the output folder itself for a run of all States). The log gives the smoothing factors used, the bridge and tunnel spans found, the number of sag curves on bridges, the share of the network with available sight distance under 400 feet, and any warnings and errors. At the end of a run the GUI reports whether any errors were logged.
+- **Run Log**: the GUI shows the progress of each run and saves everything it shows to `Run_Log_<state>_<date>_v<n>.txt` in the State's output folder (the output folder itself for a run of all States). The log gives the records processed (county, facility types, functional systems and owners), the smoothing factors used, the bridge and tunnel spans found, the number of sag curves on bridges, the share of the network with available sight distance under 400 feet, and any warnings and errors. At the end of a run the GUI reports whether any errors were logged.
 - **Validator report**: `qa_validation_report_<state>_<date>_v<n>.txt`, beside the files it checked (Chapter 11).
 - **Calibration outputs**: the factors file, the filled factors file, the audit table, and a run log (Section 9.5).
 
@@ -2364,6 +2364,9 @@ Table B-1 lists the parameters a user can change, with their defaults. "GUI" mea
 | `MAX_CHUNK_SPLIT_MILES` | 25 mi | GUI | Longest chunk processed as one task | 2.7 |
 | `CHUNK_SPLIT_PADDING_FT` | 20,000 ft | GUI | Extra line on each side of a split piece | 2.7 |
 | `LOG_FSYSTEM_DETAIL` | False | Core | List each chunk's functional class in the Run Log | 3.5.1 |
+| `COUNTY_FIPS` | Blank | GUI, 4D tool | County processed (three-digit code); blank for the whole State | 2.2.1 |
+| `OWNERSHIP_FILTER` | All owners | GUI, 4D tool | HPMS Ownership codes processed; empty for every record | 2.2.1 |
+| `OWNERSHIP_INCLUDE_MISSING` | False | GUI, 4D tool | Also process records with no ownership when owners are selected | 2.2.1 |
 | `PP_SPEED_MPH` | Blank | GUI | Speed limit for a plan and profile run (15 to 80 mph); sets the reference speed and the sight distance warning | 5.6.3, 5.8 |
 | `NEARBY_LINES_FROM_SOCRATA` | True | Plan/profile tool | Add nearby HPMS lines of every facility type from the data portal | 7.2.1 |
 | `MAX_UNENRICHED_PCT` | 5 % | 4D tool | Records left out above which the Run Log shows an error | 8.3 |
