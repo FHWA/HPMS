@@ -34,7 +34,7 @@ in inches) on its own right-hand axis, separate from IRI Reported (in/mi)
 on the left, because the two have different units.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, November 5, 2026
+VERSION: 3.3, November 6, 2026
 """
 import os
 import sys
@@ -53,6 +53,7 @@ if RAT_SUITE_DIR not in sys.path:
 from core.rat_core import (
     build_params,
     record_filter_args,
+    record_filter_rows,
     SOCRATA_TOKEN as ENV_SOCRATA_TOKEN,
     FEET_PER_METER,
     build_route_continuity_chunks,
@@ -510,7 +511,9 @@ def generate_interactive_profile(df_vtx, df_h, df_v, out_path, route_id, params=
         try:
             mp_start = float(df_vtx["Milepost"].min()) if "Milepost" in df_vtx.columns and not df_vtx.empty else None
             mp_end = float(df_vtx["Milepost"].max()) if "Milepost" in df_vtx.columns and not df_vtx.empty else None
-            param_summary = build_run_param_summary(params, route_id=route_id, mp_start=mp_start, mp_end=mp_end)
+            param_summary = build_run_param_summary(
+                params, route_id=route_id, mp_start=mp_start, mp_end=mp_end, include_fsystem=False,
+                speed_mph=entered_speed(params), sight_warning_ft=sight_warning_ft)
             panel_html = render_param_panel_html(param_summary)
             html_content = html_content.replace("</body>", panel_html + "\n</body>")
         except Exception as e:
@@ -559,6 +562,8 @@ def main():
         logging.info(f"No speed limit entered: vertical curves are compared with the HPMS speed limit "
                      f"where reported, else the default for the functional class; points with "
                      f"available sight distance under {sight_warning_ft:.0f} ft are marked.")
+    # The route is chosen by its ID, so its functional system is not filtered.
+    logging.info("Records processed: " + "; ".join(f"{name}: {value}" for name, value in record_filter_rows(user_params, include_fsystem=False)))
 
     shared_cache_dir = os.path.join(args.demdir, "align_1m_cache")
 
@@ -708,11 +713,9 @@ def main():
         param_summary = build_run_param_summary(
             params, route_id=route_norm,
             mp_start=float(global_mp_start), mp_end=float(global_mp_end),
+            include_fsystem=False, speed_mph=speed_mph, sight_warning_ft=sight_warning_ft,
         )
-        identity = param_summary.setdefault("identity", {})
-        identity["dem_tile_dir"] = shared_cache_dir
-        identity["speed_mph"] = speed_mph
-        identity["sight_warning_ft"] = sight_warning_ft
+        param_summary["identity"]["dem_tile_dir"] = shared_cache_dir
         save_run_param_summary_json(param_summary, params_json_path)
         logging.info(f"Saved run-parameters summary: {params_json_path}")
     except Exception as e:

@@ -33,7 +33,7 @@ plan-view relief come from the cached 1 m DEM tiles, and cross-section
 sheets from the *_cross_sections.csv files, when present.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, November 4, 2026
+VERSION: 3.3, November 6, 2026
 """
 import os
 import sys
@@ -379,7 +379,7 @@ def _draw_cross_section(ax, st, prof, curve_info):
     ax.grid(True, which="minor", axis="x", color="#e5e5e5", lw=0.4)
     ax.tick_params(labelsize=7)
 
-    head = f"{st['Station_ID']}   MP {st['Milepost']:.3f}   {st['Station_Type']}"
+    head = f"{st['Station_ID']}   RP {st['Milepost']:.3f}   {st['Station_Type']}"
     if pd.notna(st.get("Curve_No")):
         head += f", curve {int(st['Curve_No'])}"
         if curve_info:
@@ -443,7 +443,8 @@ def add_cover_page(pdf: PdfPages, route_id: str, mp_start: float, mp_end: float,
                     overview_lon: np.ndarray = None, overview_lat: np.ndarray = None) -> None:
     """
     Cover page (first page, landscape): route, milepost range, run date,
-    sheet count and, when available, the run's parameters on the left; an
+    sheet count and, when available, the records processed (county,
+    facility types, owners) and the run's parameters on the left; an
     overview map of the route on the right. The sheets that follow then
     need not repeat the settings.
 
@@ -474,12 +475,12 @@ def add_cover_page(pdf: PdfPages, route_id: str, mp_start: float, mp_end: float,
     LABEL_W = 0.15   # width reserved for a label before its value
     y = 0.85
     fig.text(LX, y, "Route:", fontsize=13, fontweight='bold'); fig.text(LX + LABEL_W, y, str(route_id), fontsize=13)
-    y -= 0.032
-    fig.text(LX, y, "Milepost Range:", fontsize=13, fontweight='bold')
+    y -= 0.029
+    fig.text(LX, y, "Reference Point Range:", fontsize=13, fontweight='bold')
     fig.text(LX + LABEL_W, y, f"{mp_start:.3f} to {mp_end:.3f}", fontsize=13)
-    y -= 0.032
+    y -= 0.029
     fig.text(LX, y, "Run Date:", fontsize=13, fontweight='bold'); fig.text(LX + LABEL_W, y, str(date_str), fontsize=13)
-    y -= 0.032
+    y -= 0.029
     identity = (param_summary or {}).get("identity", {})
     if "sight_warning_ft" in identity:
         speed = identity.get("speed_mph")
@@ -489,10 +490,37 @@ def add_cover_page(pdf: PdfPages, route_id: str, mp_start: float, mp_end: float,
                                    if speed is not None else
                                    f"not entered (HPMS or default by class); sight warning under {warn:.0f} ft"),
                  fontsize=13 if speed is not None else 11)
-        y -= 0.032
+        y -= 0.029
     fig.text(LX, y, "Total Sheets:", fontsize=13, fontweight='bold'); fig.text(LX + LABEL_W, y, str(num_pages), fontsize=13)
 
-    y -= 0.045
+    # Records processed: county, facility types and owners (run-parameters
+    # file; absent in files from earlier versions).
+    filters = (param_summary or {}).get("filters", [])
+    if filters:
+        y -= 0.04
+        fig.text(LX, y, "Records Processed", fontsize=12, fontweight='bold', color='#2c3e50')
+        y -= 0.028
+        # Two columns, as for the core parameters below; a long value (the
+        # owners) gets a row to itself.
+        col = 0
+        for item in filters:
+            wide = len(item['value']) > 18
+            if wide and col == 1:
+                col = 0
+                y -= 0.022
+            x0 = LX + (0.235 if col else 0)
+            fig.text(x0, y, f"{item['label']}:", fontsize=9, color='#444444')
+            fig.text(x0 + 0.11, y, item['value'], fontsize=9, fontweight='bold')
+            if col == 0 and not wide:
+                col = 1
+            else:
+                col = 0
+                y -= 0.022
+        if col == 1:
+            y -= 0.022
+        y += 0.022
+
+    y -= 0.035
     fig.text(LX, y, "-" * 62, fontsize=9, color='#999999')
 
     if param_summary:
@@ -500,9 +528,9 @@ def add_cover_page(pdf: PdfPages, route_id: str, mp_start: float, mp_end: float,
         adv_items = param_summary.get("advanced", [])
         fs_overrides = param_summary.get("fs_overrides", [])
 
-        y -= 0.04
+        y -= 0.035
         fig.text(LX, y, "Run Parameters", fontsize=15, fontweight='bold')
-        y -= 0.032
+        y -= 0.029
         fig.text(LX, y, "Core Parameters", fontsize=12, fontweight='bold', color='#2c3e50')
         y -= 0.03
 
@@ -516,30 +544,35 @@ def add_cover_page(pdf: PdfPages, route_id: str, mp_start: float, mp_end: float,
                 col = 1
             else:
                 col = 0
-                y -= 0.024
+                y -= 0.020
         if col == 1:
-            y -= 0.024
+            y -= 0.020
 
         if fs_overrides:
-            y -= 0.022
+            y -= 0.016
             fig.text(LX, y, "Horizontal Smoothing by FS", fontsize=12,
                      fontweight='bold', color='#2c3e50')
-            y -= 0.028
-            fig.text(LX, y, "FS", fontsize=9, fontweight='bold')
-            fig.text(LX + 0.08, y, "H Factor", fontsize=9, fontweight='bold')
-            y -= 0.022
-            for o in fs_overrides:
-                fig.text(LX, y, f"FS{o['fs']}", fontsize=9)
-                fig.text(LX + 0.08, y, o['h'], fontsize=9)
-                y -= 0.022
+            y -= 0.024
+            # Two columns (FS2-FS4, then FS5-FS7) to leave room for the
+            # advanced parameters.
+            half = (len(fs_overrides) + 1) // 2
+            for c in range(2 if len(fs_overrides) > 1 else 1):
+                fig.text(col_x[c], y, "FS", fontsize=9, fontweight='bold')
+                fig.text(col_x[c] + 0.08, y, "H Factor", fontsize=9, fontweight='bold')
+            y -= 0.019
+            for i, o in enumerate(fs_overrides):
+                c, r = divmod(i, half)
+                fig.text(col_x[c], y - r * 0.019, f"FS{o['fs']}", fontsize=9)
+                fig.text(col_x[c] + 0.08, y - r * 0.019, o['h'], fontsize=9)
+            y -= half * 0.019
 
         if adv_items:
-            y -= 0.022
+            y -= 0.016
             fig.text(LX, y, "Advanced Parameters", fontsize=12, fontweight='bold', color='#2c3e50')
-            y -= 0.028
+            y -= 0.024
             col = 0
             for item in adv_items:
-                if y < 0.06:
+                if y < 0.065:
                     # Out of room on the page; say so rather than drop them silently.
                     fig.text(LX, y, "(additional parameters omitted -- see run_parameters.json)",
                              fontsize=8, style='italic', color='#888888')
@@ -550,7 +583,7 @@ def add_cover_page(pdf: PdfPages, route_id: str, mp_start: float, mp_end: float,
                     col = 1
                 else:
                     col = 0
-                    y -= 0.022
+                    y -= 0.019
     else:
         y -= 0.04
         fig.text(LX, y, "Run parameters unavailable for this CSV set", fontsize=10,
@@ -1121,11 +1154,11 @@ def make_pdf(vertices_csv, horizontal_csv, vertical_csv, pdf_out, route_id, dem_
                         s1 = min(global_mp_end, s0 + TERRAIN_SECTION_MILES)
                         m = (mp_array >= s0) & (mp_array <= s1)
                         if m.sum() >= 2:
-                            sections.append((f"{chr(65 + k_sec) if k_sec < 26 else k_sec + 1}: MP {s0:.2f}-{s1:.2f}",
+                            sections.append((f"{chr(65 + k_sec) if k_sec < 26 else k_sec + 1}: RP {s0:.2f}-{s1:.2f}",
                                              m, terrain_map_box(tile_dir, all_lon[m], all_lat[m])))
 
                 if TERRAIN_OVERVIEW_PAGE:
-                    sub_t = (f"MP {global_mp_start:.3f} to {global_mp_end:.3f}"
+                    sub_t = (f"RP {global_mp_start:.3f} to {global_mp_end:.3f}"
                              + (f"   --   dashed boxes show the {len(sections)} section pages that follow" if sections else ""))
                     add_terrain_page(pdf, f"TERRAIN OVERVIEW: {route_id}", sub_t, all_lon, all_lat,
                                      mp_array, kinds, tile_dir, TERRAIN_OVERVIEW_MAX_PX,

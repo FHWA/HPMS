@@ -24,7 +24,7 @@ it collects inputs, packages them into a JSON payload, and uses the subprocess
 module to safely execute the suite's CLI scripts in isolated memory environments.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, November 5, 2026
+VERSION: 3.3, November 6, 2026
 """
 
 import os
@@ -1071,6 +1071,7 @@ class RATUnifiedGUI:
                 current[k] = (v, self.advanced_defaults[k])
 
         self._check_state_factors(source)
+        self._note_restored_limits(source)
 
         differs, retired = [], []
         for k, (default, var) in current.items():
@@ -1100,6 +1101,28 @@ class RATUnifiedGUI:
                     var.set(default)
                 logging.info("Updated outdated settings to current defaults: "
                              + ", ".join(k for k, *_ in retired))
+
+    def _note_restored_limits(self, source: str):
+        """
+        Notes in the Run Log any restored setting that limits the next run
+        to part of a State or to one road: County FIPS, an Ownership
+        selection, and the Plan/Profile Speed Limit. They are kept from the
+        last run like every other setting, so a statewide run after a county
+        run needs them cleared.
+        """
+        limits = []
+        county = self.vars["county_fips"].get().strip()
+        if county:
+            limits.append(f"County FIPS {county}")
+        if self.ownership_codes:
+            limits.append("Ownership " + ownership_summary(
+                self.ownership_codes, bool(self.vars["ownership_include_missing"].get())))
+        speed = self.vars["pp_speed_mph"].get().strip()
+        if speed:
+            limits.append(f"Plan/Profile Speed Limit {speed} mph")
+        if limits:
+            logging.warning(f"Settings loaded from {source} limit the next run: " + "; ".join(limits)
+                            + ". Clear them if the next run is for a whole State or another road.")
 
     def _toggle_source(self):
         use_local = self.vars["use_local"].get()

@@ -30,7 +30,7 @@ the same output. Elevations come from the USGS 3DEP 1 m DEM, cached in
 align_1m_cache under the DEM directory.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, November 5, 2026
+VERSION: 3.3, November 6, 2026
 """
 import os
 import glob
@@ -84,6 +84,7 @@ from core.rat_core import (
     filter_local_df_to_state,
     apply_facility_fsystem_filters,
     record_filter_args,
+    record_filter_rows,
     run_label,
     FEET_PER_METER,
     calculate_headings,
@@ -1513,6 +1514,7 @@ def _run_state_alignment(state_fips: str, out_dir: str, dem_dir: str, user_param
 
     area = f"STATE {state_fips}" + (f", COUNTY {filters['county_fips']}" if filters["county_fips"] else "")
     logging.info(f"\n{'='*60}\n=== ALIGNMENT PROCESSING: {area} ===\n{'='*60}")
+    logging.info("Records processed: " + "; ".join(f"{name}: {value}" for name, value in record_filter_rows(user_params)))
 
     user_params_local = user_params.copy()
     user_params_local["STATE_FIPS"] = state_fips

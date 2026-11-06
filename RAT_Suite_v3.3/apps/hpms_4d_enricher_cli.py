@@ -34,7 +34,7 @@ the smoothed pipeline are filled this way. The Elevation_Source column
 reads "smoothed" or "raw_fallback" so the two can be told apart.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, November 5, 2026
+VERSION: 3.3, November 6, 2026
 """
 import os
 import sys
@@ -58,6 +58,7 @@ if RAT_SUITE_DIR not in sys.path:
 
 from core.rat_core import (
     record_filter_args,
+    record_filter_rows,
     run_label,
     build_params,
     build_route_continuity_chunks,
@@ -587,6 +588,11 @@ def _run_state_enrichment(state_fips: str, local_df: pd.DataFrame, state: str, l
 
     params = build_params(user_params)
     logging.info(describe_smoothing_factors(params))
+    logging.info("Records processed: " + "; ".join(f"{name}: {value}" for name, value in record_filter_rows({
+        "STATE_FIPS": state, "COUNTY_FIPS": COUNTY_FIPS,
+        "FACILITY_TYPE_FILTER": FACILITY_TYPE_FILTER, "FACILITY_TYPE_INCLUDE_MISSING": FACILITY_TYPE_INCLUDE_MISSING,
+        "FSYSTEM_FILTER": FSYSTEM_FILTER, "FSYSTEM_INCLUDE_MISSING": FSYSTEM_INCLUDE_MISSING,
+        "OWNERSHIP_FILTER": OWNERSHIP_FILTER, "OWNERSHIP_INCLUDE_MISSING": OWNERSHIP_INCLUDE_MISSING})))
 
     try:
         if local_df is not None:
