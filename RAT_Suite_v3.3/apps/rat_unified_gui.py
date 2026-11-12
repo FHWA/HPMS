@@ -24,7 +24,7 @@ it collects inputs, packages them into a JSON payload, and uses the subprocess
 module to safely execute the suite's CLI scripts in isolated memory environments.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, November 6, 2026
+VERSION: 3.3, November 12, 2026
 """
 
 import os
@@ -452,9 +452,13 @@ class RATUnifiedGUI:
         self.root.resizable(True, True)
         self.root.configure(bg="#E0E0E0")
 
-        # The processing step running now (a subprocess), so closing the
-        # window can stop it instead of leaving it running unseen.
+        # The subprocess running now (a processing step, the PDF renderer or
+        # the validator), so closing the window can stop it instead of leaving
+        # it running unseen. _run_active is True from Run until the run ends,
+        # including the stretches between subprocesses (Socrata download,
+        # national merge), so closing the window asks first at any stage.
         self._active_proc = None
+        self._run_active = False
         self._closing = False
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -1364,6 +1368,11 @@ class RATUnifiedGUI:
             logging.warning(f"Could not open output folder: {e}")
 
     def _set_status(self, phase, detail=None, busy=False):
+        # A run calls this with busy=False only when its work is over (done,
+        # failed or stopped), just before its closing message. From then on
+        # closing the window no longer counts as stopping a run.
+        if not busy:
+            self._run_active = False
         def update():
             if not hasattr(self, "status_phase") or not hasattr(self, "status_detail") or not hasattr(self, "status_progress"):
                 return
@@ -1848,6 +1857,30 @@ class RATUnifiedGUI:
         self._active_proc = p
         return p
 
+    def _run_child(self, cmd):
+        """
+        Runs a short subprocess (PDF renderer, validator) to completion and
+        returns a subprocess.CompletedProcess. Started like a processing step
+        (_launch_step), so closing the window stops it too.
+        """
+        if self._closing:
+            raise SystemExit
+        extra = {} if os.name == "nt" else {"start_new_session": True}
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, env=os.environ.copy(), **extra)
+        self._active_proc = p
+        out, err = p.communicate()
+        return subprocess.CompletedProcess(cmd, p.returncode, out, err)
+
+    @staticmethod
+    def _write_csv_atomic(df, path):
+        """Writes a CSV through a temporary file, so a run stopped part way
+        (window closed) never leaves a partly written file under the real
+        name."""
+        tmp = path + ".tmp"
+        df.to_csv(tmp, index=False)
+        os.replace(tmp, path)
+
     @staticmethod
     def _stop_process_tree(p):
         """Ends a step and every process it started (its worker pool)."""
@@ -1869,16 +1902,19 @@ class RATUnifiedGUI:
 
     def _on_close(self):
         """
-        Closing the window while a step is running would leave that step
-        running unseen, still writing files (and could overwrite a later
-        run's outputs). Asks first, and stops the step and its workers.
+        Closing the window during a run would stop it part way, and a step
+        left running unseen would keep writing files (and could overwrite a
+        later run's outputs). Asks first whenever a run is in progress, at
+        any stage, then stops the subprocess running now and its workers.
         """
         p = self._active_proc
-        if p is not None and p.poll() is None:
+        proc_running = p is not None and p.poll() is None
+        if self._run_active or proc_running:
             if not messagebox.askyesno(
                 "Run in progress",
-                "A run is still in progress. Closing the window will stop it, and "
-                "the step that is running will not write its outputs.\n\n"
+                "A run is still in progress. Closing the window will stop it; "
+                "the part that is running now will not finish or write its "
+                "outputs.\n\n"
                 "Stop the run and close?",
                 icon="warning",
             ):
@@ -1961,7 +1997,7 @@ class RATUnifiedGUI:
         if len(cmd) == 2:
             return None, ""
 
-        p = subprocess.run(cmd, capture_output=True, text=True, env=os.environ.copy())
+        p = self._run_child(cmd)
         msg = (p.stdout or "") + ("\n" + p.stderr if p.stderr else "")
         return p.returncode, msg.strip()
 
@@ -2064,6 +2100,7 @@ class RATUnifiedGUI:
                 h.close()
 
     def _run(self):
+        self._run_active = True
         run_log_handler, error_counter, run_log_path = None, None, None
         # Files written from here on belong to this run. The small margin
         # allows for file systems that store times to the nearest 2 seconds.
@@ -2218,7 +2255,12 @@ class RATUnifiedGUI:
                             messagebox.showerror("Download Failed", f"Socrata download failed:\n{ex}")
                             return
 
-                        df.to_csv(input_path, index=False)
+                        # The filters file is removed first and written last,
+                        # so a stopped run never leaves an extract that a
+                        # later run could reuse under the wrong filters.
+                        if os.path.exists(filters_path):
+                            os.remove(filters_path)
+                        self._write_csv_atomic(df, input_path)
                         with open(filters_path, "w", encoding="utf-8") as f:
                             json.dump(extract_filters, f, indent=2)
                         logging.info(f"Socrata extract saved: {input_path} ({len(df):,} rows)")
@@ -2355,7 +2397,7 @@ class RATUnifiedGUI:
                                 else:
                                     logging.warning("Profile elevation interval must be a positive number of feet; "
                                                     "elevations omitted from the PDF.")
-                            p_pdf = subprocess.run(cmd_pdf, capture_output=True, text=True, env=os.environ.copy())
+                            p_pdf = self._run_child(cmd_pdf)
                             
                             if p_pdf.stdout:
                                 logging.info(p_pdf.stdout.strip())
@@ -2484,7 +2526,7 @@ class RATUnifiedGUI:
                             missing.append(fips)
                     if frames:
                         national_df = pd.concat(frames, ignore_index=True)
-                        national_df.to_csv(national_csv, index=False)
+                        self._write_csv_atomic(national_df, national_csv)
                         logging.info(f"\nNational merge complete: {len(national_df):,} total rows")
                         logging.info(f"Saved: {os.path.basename(national_csv)}")
                         if missing:
@@ -2537,6 +2579,7 @@ class RATUnifiedGUI:
             self._set_status("Error", str(e), busy=False)
             messagebox.showerror("Error", str(e))
         finally:
+            self._run_active = False
             if run_log_handler is not None:
                 logging.info(f"Run ended {datetime.now():%Y-%m-%d %H:%M:%S}")
             self._stop_run_log(run_log_handler, error_counter)
