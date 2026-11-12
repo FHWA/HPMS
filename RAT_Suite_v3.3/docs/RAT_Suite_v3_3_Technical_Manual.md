@@ -399,7 +399,7 @@ The plan and profile tool follows the same steps for a single route and then add
 
 ### 2.1 Processing Flow
 
-The Unified GUI does no geometric processing itself. It collects the user's settings, saves them to a file named `run_params.json` in the output folder, and runs each selected tool as a separate process. Running each tool as its own process keeps the memory used by a statewide run apart from the GUI. Closing the GUI while a tool is running asks whether to stop the run. Stopping ends the tool and its worker processes, and no further steps start.
+The Unified GUI does no geometric processing itself. It collects the user's settings, saves them to a file named `run_params.json` in the output folder, and runs each selected tool as a separate process. Running each tool as its own process keeps the memory used by a statewide run apart from the GUI. Closing the GUI at any stage of a run asks whether to stop it. Stopping ends whatever is running, with its worker processes, and no further steps start.
 
 When the input is the U.S. DOT data portal and a single State is selected, the GUI first downloads that State's records and saves them as a CSV file. Each tool then reads that file. When all States are selected, each tool downloads the records for one State at a time.
 
