@@ -25,7 +25,7 @@ calculus-based curvature analysis (kappa), and KDTree spatial indexing for
 4D geometry generation.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, November 6, 2026
+VERSION: 3.3, November 13, 2026
 """
 from typing import Dict, List, Tuple, Optional
 import math
@@ -1890,6 +1890,148 @@ def _socrata_frame(rows: list) -> pd.DataFrame:
     return df
 
 
+# HPMS fields as named on the U.S. DOT data portal: (name, label shown in the
+# GUI's field selector, selected by default for the 4D output). Also the list
+# load_local_hpms() uses to restore names a shapefile has shortened.
+HPMS_FIELD_CATALOG = [
+    ("stateid",                "State FIPS",                             True),
+    ("year_record",            "Data Year",                              True),
+    ("route_id",               "Route ID",                               True),
+    ("begin_point",            "Begin Point (Start MP)",                 True),
+    ("end_point",              "End Point (End MP)",                     True),
+    ("f_system",               "Functional System",                      True),
+    ("facility_type",          "Facility Type",                          True),
+    ("urban_id",               "Urban Area Code",                        True),
+    ("nhs",                    "NHS Status",                             True),
+    ("strahnet_type",          "STRAHNET Type",                          False),
+    ("nn",                     "National Truck Network",                 False),
+    ("nhfn",                   "National Highway Freight Network",       False),
+    ("ownership",              "Ownership",                              True),
+    ("county_id",              "County FIPS",                            True),
+    ("maintenance_operations", "Maintenance Operations",                 False),
+    ("is_restricted",          "Access Restricted",                      True),
+    ("route_signing",          "Route Signing",                          True),
+    ("route_number",           "Route Number",                           True),
+    ("route_qualifier",        "Route Qualifier",                        False),
+    ("route_name",             "Route Name",                             False),
+    ("sample_id",              "Sample ID",                              False),
+    ("section_length",         "Section Length",                         True),
+    ("shape_id",               "Shape ID",                               False),
+    ("srid",                   "Spatial Reference ID",                   False),
+    ("through_lanes",          "Through Lanes",                          True),
+    ("dir_through_lanes",      "Directional Through Lanes",              False),
+    ("managed_lanes_type",     "Managed Lanes Type",                     False),
+    ("managed_lanes",          "Managed Lanes Count",                    False),
+    ("peak_lanes",             "Peak Direction Lanes",                   False),
+    ("counter_peak_lanes",     "Counter-Peak Direction Lanes",           False),
+    ("peak_parking",           "Peak Parking",                           False),
+    ("toll_id",                "Toll Facility ID",                       False),
+    ("lane_width",             "Lane Width",                             False),
+    ("median_type",            "Median Type",                            False),
+    ("median_width",           "Median Width",                           False),
+    ("shoulder_type",          "Shoulder Type",                          False),
+    ("shoulder_width_r",       "Right Shoulder Width",                   False),
+    ("shoulder_width_l",       "Left Shoulder Width",                    False),
+    ("turn_lanes_r",           "Right Turn Lanes",                       False),
+    ("turn_lanes_l",           "Left Turn Lanes",                        False),
+    ("widening_potential",     "Widening Potential (Lanes)",             False),
+    ("widening_obstacle",      "Widening Obstacle",                      False),
+    ("access_control",         "Access Control",                         True),
+    ("structure_type",         "Structure Type",                         True),
+    ("bridge_id",              "Bridge ID (NBI Linkage)",                True),
+    ("tunnel_id",              "Tunnel ID (NTI Linkage)",                True),
+    ("signal_type",            "Signal Type",                            False),
+    ("pct_green_time",         "Percent Green Time",                     False),
+    ("number_signals",         "Number of Signals",                      False),
+    ("stop_signs",             "Stop Signs",                             False),
+    ("at_grade_other",         "At-Grade Other Intersections",           False),
+    ("aadt",                   "AADT",                                   True),
+    ("aadt_d",                 "AADT Collection Date",                   False),
+    ("aadt_single_unit",       "AADT Single Unit Trucks",                True),
+    ("aadt_combination",       "AADT Combination Trucks",                True),
+    ("pct_dh_single_unit",     "% Peak Hour Single Unit Trucks",         False),
+    ("pct_dh_combination",     "% Peak Hour Combination Trucks",         False),
+    ("k_factor",               "K-Factor",                               False),
+    ("dir_factor",             "Directional Distribution Factor",        False),
+    ("future_aadt",            "Future AADT",                            False),
+    ("future_aadt_year",       "Future AADT Year",                       False),
+    ("speed_limit",            "Speed Limit",                            True),
+    ("surface_type",           "Surface Type",                           False),
+    ("iri",                    "IRI (Roughness)",                        False),
+    ("iri_d",                  "IRI Collection Date",                    False),
+    ("psr",                    "Pavement Serviceability Rating",         False),
+    ("psr_d",                  "PSR Collection Date",                    False),
+    ("rutting",                "Rutting",                                False),
+    ("rutting_d",              "Rutting Collection Date",                False),
+    ("faulting",               "Faulting",                               False),
+    ("faulting_d",             "Faulting Collection Date",               False),
+    ("cracking_percent",       "Cracking Percent",                       False),
+    ("cracking_percent_d",     "Cracking Collection Date",               False),
+    ("year_last_improvement",  "Year Last Improved",                     False),
+    ("year_last_construction", "Year Last Constructed",                  False),
+    ("last_overlay_thickness", "Last Overlay Thickness",                 False),
+    ("thickness_rigid",        "Rigid Pavement Thickness",               False),
+    ("thickness_flexible",     "Flexible Pavement Thickness",            False),
+    ("base_type",              "Base Pavement Type",                     False),
+    ("base_thickness",         "Base Thickness",                         False),
+    ("soil_type",              "Soil Type (AASHTO)",                     False),
+    ("curves_a",               "Curves A — Length (mi)",                 True),
+    ("curves_b",               "Curves B — Length (mi)",                 True),
+    ("curves_c",               "Curves C — Length (mi)",                 True),
+    ("curves_d",               "Curves D — Length (mi)",                 True),
+    ("curves_e",               "Curves E — Length (mi)",                 True),
+    ("curves_f",               "Curves F — Length (mi)",                 True),
+    ("terrain_type",           "Terrain Type",                           False),
+    ("grades_a",               "Grades A — Length (mi)",                 True),
+    ("grades_b",               "Grades B — Length (mi)",                 True),
+    ("grades_c",               "Grades C — Length (mi)",                 True),
+    ("grades_d",               "Grades D — Length (mi)",                 True),
+    ("grades_e",               "Grades E — Length (mi)",                 True),
+    ("grades_f",               "Grades F — Length (mi)",                 True),
+    ("pct_pass_sight",         "Percent Passing Sight Distance",         False),
+    ("travel_time_code",       "Travel Time Code",                       False),
+]
+
+
+
+# A shapefile stores field names in dBASE format, at most 10 characters, so
+# GIS software cuts longer names when it writes one (begin_point ->
+# begin_poin, facility_type -> facility_t, through_lanes -> through_la).
+SHAPEFILE_FIELD_NAME_LEN = 10
+
+
+def restore_shortened_field_names(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Renames columns whose names a shapefile has cut to 10 characters back
+    to the full HPMS field name (HPMS_FIELD_CATALOG), so begin_poin is read
+    as begin_point and through_la as through_lanes. A column is renamed
+    only when its name (any case) is exactly 10 characters, is not itself
+    an HPMS field name, is the start of exactly one longer HPMS field name,
+    and that full name is not already a column. Shortened names shared by
+    two fields (shoulder_w: shoulder_width_r or _l) are left as they are;
+    RAT reads none of those. Logs the names restored.
+    """
+    full_names = [name for name, _, _ in HPMS_FIELD_CATALOG]
+    known = set(full_names)
+    present = {str(col).lower() for col in df.columns}
+    renames = {}
+    for col in df.columns:
+        low = str(col).lower()
+        if len(low) != SHAPEFILE_FIELD_NAME_LEN or low in known:
+            continue
+        matches = [n for n in full_names
+                   if len(n) > SHAPEFILE_FIELD_NAME_LEN and n.startswith(low)]
+        if len(matches) == 1 and matches[0] not in present:
+            renames[col] = matches[0]
+            present.add(matches[0])
+    if renames:
+        logging.info(
+            "Restored field names shortened by the shapefile format: "
+            + ", ".join(f"{old} -> {new}" for old, new in renames.items()) + ".")
+        df = df.rename(columns=renames)
+    return df
+
+
 def load_local_hpms(path: str) -> pd.DataFrame:
     if not os.path.exists(path):
         raise FileNotFoundError(path)
@@ -1949,6 +2091,10 @@ def load_local_hpms(path: str) -> pd.DataFrame:
             gdf = gdf.to_crs(epsg=4326)
         df = pd.DataFrame(gdf.drop(columns="geometry"))
         df["WKT"] = gdf["geometry"].apply(lambda g: g.wkt if g else None)
+
+    # Shapefiles (and CSV files exported from them) carry field names cut to
+    # 10 characters.
+    df = restore_shortened_field_names(df)
 
     col_map = {}
     for col in df.columns:
