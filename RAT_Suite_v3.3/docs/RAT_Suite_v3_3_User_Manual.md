@@ -128,7 +128,7 @@ A local file must have a route identifier column and line geometry. Common HPMS 
 | Ownership | `ownership`, `owner` (needed for an Ownership selection) |
 | Geometry (CSV) | `WKT`, `geometry`, `shape`, `the_geom`, `line` (well-known text) |
 
-Shapefiles and GeoJSON files in another coordinate system are reprojected to WGS 84 when read. Enter the State FIPS code for a local file whenever it is known; it selects the State's smoothing factors and bridge records. Without it, outputs are labeled `LOCAL` and national factors are used.
+A shapefile cuts field names to 10 characters (`begin_poin`, `facility_t`, `through_la`); these are read as the full HPMS names, so a shapefile exported from the portal data needs no renaming. Shapefiles and GeoJSON files in another coordinate system are reprojected to WGS 84 when read. Enter the State FIPS code for a local file whenever it is known; it selects the State's smoothing factors and bridge records. Without it, outputs are labeled `LOCAL` and national factors are used.
 
 ### 4.2 Directories
 
