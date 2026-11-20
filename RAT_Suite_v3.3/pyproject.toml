@@ -17,12 +17,19 @@ dependencies = [
     "pandas",
     "geopandas",
     "shapely",
+    "fiona",
     "scipy",
     "rasterio",
     "pyproj",
     "folium",
     "matplotlib",
+    "plotly",
+    "contextily",
     "requests",
     "Pillow",
-    "plotly"
 ]
+
+# The suite runs from its own folder (python apps/rat_unified_gui.py), so
+# "pip install ." installs only the dependencies above and no packages.
+[tool.setuptools]
+packages = []
