@@ -28,7 +28,7 @@ serves rat_plan_profile_cli.py, rat_alignment_cli.py (CSV only) and
 tools/rat_structure_span_check.py.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, November 6, 2026
+VERSION: 3.3, November 20, 2026
 """
 import math
 import logging
@@ -180,6 +180,10 @@ def render_structure_span_pdf(vtx: pd.DataFrame, spans: pd.DataFrame, pdf_path: 
             ax_p.grid(alpha=0.3)
             ax_p.legend(fontsize=9, loc="best")
             ax_p.ticklabel_format(useOffset=False, style="plain", axis="x")
+            if mp[b] < mp[a]:
+                # Decreasing reference point run: the profile reads left to
+                # right in the direction of travel.
+                ax_p.invert_xaxis()
 
             # Relief
             ax_m = fig.add_axes([0.55, 0.10, 0.40, 0.76])

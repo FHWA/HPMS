@@ -125,7 +125,7 @@ judge (the run lies on or beside a structure), the station test decides
 alone.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, October 29, 2026
+VERSION: 3.3, November 20, 2026
 """
 import math
 import os
@@ -1376,8 +1376,12 @@ def build_cross_sections(vtx: pd.DataFrame, curves: List[Dict], tile_dir: str,
             d = _off_structure(frame.dist, span, float(np.clip(d, d_min, d_max)))
             if not s_ft <= d <= e_ft:
                 continue    # the curve lies on the structure there
-            if placed and abs(d - placed[-1]["Dist_Ft"]) < _MIN_STATION_GAP_FT / 5:
-                placed[-1]["Station_Type"] += " / " + kind
+            # A spot at (or next to) one already placed for this curve is
+            # merged into it; the mid-curve spot can lie before or after the
+            # full-superelevation run, so every placed spot is checked.
+            near = [p for p in placed if abs(d - p["Dist_Ft"]) < _MIN_STATION_GAP_FT / 5]
+            if near:
+                near[0]["Station_Type"] += " / " + kind
                 continue
             placed.append({"Dist_Ft": d, "Station_Type": kind, "Curve_No": no, "Curve_Dir": c.get("Dir", ""),
                            "Curve_Superelevation_Pct": c["Superelevation_Meas_Pct"],

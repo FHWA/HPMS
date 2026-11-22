@@ -25,7 +25,7 @@ calculus-based curvature analysis (kappa), and KDTree spatial indexing for
 4D geometry generation.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, November 13, 2026
+VERSION: 3.3, November 20, 2026
 """
 from typing import Dict, List, Tuple, Optional
 import math
@@ -4197,6 +4197,159 @@ def get_tangent_grade(z_vals: np.ndarray, idx: int, spacing_m: float, window_m: 
     return res.slope * 100.0
 
 # -------------------------
+# Arc radius of a horizontal curve
+# -------------------------
+# Share of a curve's total turn (Delta) that its main arc is taken to carry.
+# The arc radius is measured over the shortest stretch of the curve that
+# turns through this share, so the ends, where the road eases into and out
+# of the curve (spirals, or the smoothing's rounding), are left out and the
+# radius compares with the circular-arc radius R on design plans. Unlike
+# the peak curvature (Min_Radius_m), it changes little with the smoothing
+# factor.
+H_ARC_TURN_FRACTION = 0.6
+
+
+def arc_radius(headings_deg: np.ndarray, s: int, e: int, spacing_m: float,
+               fraction: float = H_ARC_TURN_FRACTION) -> float:
+    """
+    Radius (m) of a curve's main arc: the length of the shortest stretch of
+    the curve that turns through `fraction` of the curve's total turn,
+    divided by that angle in radians. headings_deg are unwrapped headings at
+    spacing_m (calculate_headings); s and e are the curve's first and last
+    point. Turning back the other way within the curve does not count (the
+    turn is taken as its running maximum). 99999.0 if the curve does not
+    turn.
+    """
+    h = np.asarray(headings_deg[s:e + 1], dtype=float)
+    if len(h) < 2:
+        return 99999.0
+    turn = np.maximum.accumulate(np.abs(h - h[0]))
+    need = fraction * float(turn[-1])
+    if need <= 1e-9:
+        return 99999.0
+    # For each starting point, the first point at which the turn since it
+    # reaches `need`; the shortest such stretch is the main arc.
+    ends = np.searchsorted(turn, turn + need - 1e-12, side='left')
+    ok = ends < len(turn)
+    if not ok.any():
+        return 99999.0
+    points = int(np.min(ends[ok] - np.flatnonzero(ok)))
+    return points * spacing_m / math.radians(need)
+
+
+# Tangent lengths and point of intersection (PI) of a horizontal curve
+# -------------------------
+# Above this deflection the tangents at the two ends of a curve are close
+# to parallel (or turn past each other), so their intersection is far from
+# the road or behind it and no PI or tangent length is reported.
+H_PI_MAX_DELTA = 170.0
+
+
+def curve_tangents(xs: np.ndarray, ys: np.ndarray, s: int, e: int,
+                   delta_deg: float) -> Tuple[float, float]:
+    """
+    Tangent lengths (m) of the curve from point s to point e of a smoothed
+    line: the distances from the start of the curve (PC or TS) and from its
+    end (PT or ST) to the PI, where the line's tangents at those two points
+    meet. On a circular curve both equal R tan(Delta/2); on a curve with
+    unequal spirals, or a compound curve, they differ. (nan, nan) when
+    delta_deg is H_PI_MAX_DELTA or more, or the tangents do not meet ahead
+    of the start and behind the end.
+    """
+    n = len(xs)
+    if e <= s or s < 0 or e >= n or not (delta_deg < H_PI_MAX_DELTA):
+        return float('nan'), float('nan')
+    ux, uy = xs[min(s + 1, e)] - xs[s], ys[min(s + 1, e)] - ys[s]
+    vx, vy = xs[e] - xs[max(e - 1, s)], ys[e] - ys[max(e - 1, s)]
+    nu, nv = math.hypot(ux, uy), math.hypot(vx, vy)
+    if nu < 1e-12 or nv < 1e-12:
+        return float('nan'), float('nan')
+    ux, uy, vx, vy = ux / nu, uy / nu, vx / nv, vy / nv
+    det = ux * vy - uy * vx
+    if abs(det) < 1e-9:
+        return float('nan'), float('nan')
+    dx, dy = xs[e] - xs[s], ys[e] - ys[s]
+    t_in = (dx * vy - dy * vx) / det
+    t_out = (ux * dy - uy * dx) / det
+    if t_in <= 0 or t_out <= 0:
+        return float('nan'), float('nan')
+    return float(t_in), float(t_out)
+
+
+def _tangent_fields(xs: np.ndarray, ys: np.ndarray, s: int, e: int,
+                    delta_deg: float, radius_m: float, spacing_m: float) -> Dict:
+    """
+    PI_Dist and Tangent_ft for a curve record.
+
+    PI_Dist (m along the road) is the curve start plus the distance from it
+    to the PI where the tangents at the curve's two ends meet (curve_tangents),
+    the way a PI station is the PC station plus T. The PI itself depends
+    little on the smoothing.
+
+    Tangent_ft is the tangent length of a circular curve with the reported
+    radius and deflection, R tan(Delta/2), as given on design plans. It is
+    not the distance from the reported curve start to the PI: on the smoothed
+    line a curve begins before, and ends after, the design PC and PT, so that
+    distance runs longer than the plans' T. Both are nan from H_PI_MAX_DELTA
+    up.
+    """
+    t_in, _ = curve_tangents(xs, ys, s, e, delta_deg)
+    ok = delta_deg < H_PI_MAX_DELTA and 0 < radius_m < 99999
+    tangent_m = radius_m * math.tan(math.radians(delta_deg / 2.0)) if ok else float('nan')
+    return {
+        'PI_Dist': s * spacing_m + t_in,
+        'Tangent_ft': tangent_m * FEET_PER_METER,
+    }
+
+
+# Two curves turning the same way with a short tangent between them can be
+# found as one: the smoothing rounds the tangent into a gentle curve, so the
+# curvature dips between the two arcs but does not fall to the straight-road
+# threshold. A run is split where the curvature falls to this share of the
+# smaller of the two peaks on either side (see _split_at_curvature_dips).
+H_SPLIT_DIP_RATIO = 0.35
+
+
+def _split_at_curvature_dips(kappa: np.ndarray, headings_deg: np.ndarray, s: int, e: int,
+                             min_pts: int, min_delta: float,
+                             ratio: float = H_SPLIT_DIP_RATIO) -> List[Tuple[int, int]]:
+    """
+    Pieces (s, e) of one curve run (one turning direction), split where the
+    curvature dips between two arcs: the stretch where kappa is no more
+    than `ratio` times the smaller of the highest curvature before it and
+    the highest after it is left out as tangent, and the parts on either
+    side become separate curves. The deepest dip is taken first and the
+    pieces are split again the same way. A split is made only if both
+    pieces are at least min_pts points long and turn at least min_delta
+    degrees, so a spiral, a compound curve (curvature stepping from one
+    radius to another) or a slight waver within one curve is not split.
+    """
+    seg = kappa[s:e + 1]
+    n = len(seg)
+    if n < 2 * min_pts + 1:
+        return [(s, e)]
+    before = np.r_[0.0, np.maximum.accumulate(seg)[:-1]]
+    after = np.r_[np.maximum.accumulate(seg[::-1])[::-1][1:], 0.0]
+    level = ratio * np.minimum(before, after)
+    low = seg <= level
+    # Each run of low points is a candidate tangent; deepest first.
+    edges = np.diff(np.r_[0, low.astype(int), 0])
+    starts, ends = np.flatnonzero(edges == 1), np.flatnonzero(edges == -1) - 1
+    cands = []
+    for a, b in zip(starts, ends):
+        depth = float(np.min(seg[a:b + 1] / np.maximum(np.minimum(before[a:b + 1], after[a:b + 1]), 1e-12)))
+        cands.append((depth, int(a), int(b)))
+    for _, a, b in sorted(cands):
+        l_s, l_e, r_s, r_e = s, s + a - 1, s + b + 1, e
+        ok = all(pe - ps >= min_pts and abs(headings_deg[pe] - headings_deg[ps]) >= min_delta
+                 for ps, pe in ((l_s, l_e), (r_s, r_e)))
+        if ok:
+            return (_split_at_curvature_dips(kappa, headings_deg, l_s, l_e, min_pts, min_delta, ratio)
+                    + _split_at_curvature_dips(kappa, headings_deg, r_s, r_e, min_pts, min_delta, ratio))
+    return [(s, e)]
+
+
+# -------------------------
 # Classification helpers
 # -------------------------
 def classify_bin(deg_per_100ft: float) -> str:
@@ -4552,17 +4705,26 @@ def analyze_horizontal_curvature(
     # ------------------------------------------------------------------
     # STEP 2: measure each candidate run, whichever method found it.
     # ------------------------------------------------------------------
-    curves = []
+    # Trimmed runs, split where the curvature dips between two arcs.
+    min_pts = max(2, int(math.ceil(min_len / spacing_m)))
+    split_ratio = params.get('H_SPLIT_DIP_RATIO', H_SPLIT_DIP_RATIO)
+    pieces = []
     for s, e, sgn in runs:
         if params.get('TRIM_CURVE_ENDPOINTS', True):
             while s < e and kappa[s] < trim_thresh:
                 s += 1
             while e > s and kappa[e] < trim_thresh:
                 e -= 1
-
         if e <= s:
             continue
+        if split_ratio:
+            pieces += [(a, b, sgn) for a, b in
+                       _split_at_curvature_dips(kappa, headings_array, s, e, min_pts, min_delta, split_ratio)]
+        else:
+            pieces.append((s, e, sgn))
 
+    curves = []
+    for s, e, sgn in pieces:
         length = (e - s) * spacing_m
         if length < min_len:
             continue
@@ -4574,12 +4736,13 @@ def analyze_horizontal_curvature(
         seg_kappa = kappa[s:e+1]
         max_k = np.nanmax(seg_kappa) if len(seg_kappa) > 0 else 0.0
         min_radius = (1.0 / max_k) if max_k > 1e-12 else 99999.0
-        radius = min_radius
-        if radius > params['H_MAX_RADIUS']:
+        if min_radius > params['H_MAX_RADIUS']:
             continue
 
-        deg_per_100 = METRIC_R_TO_IMPERIAL_D / radius if radius > 0 else 0
-        cbin = classify_bin(deg_per_100)
+        # The reported radius, and the curve class, are those of the main
+        # arc (arc_radius); Min_Radius_m keeps the tightest point.
+        radius = arc_radius(headings_array, s, e, spacing_m)
+        cbin = classify_bin(METRIC_R_TO_IMPERIAL_D / radius) if 0 < radius < 99999 else 'A'
         direction = "Left" if sgn > 0 else "Right"
 
         # Spiral detection: find the central circular curve (SC to CS)
@@ -4619,13 +4782,26 @@ def analyze_horizontal_curvature(
             'Dir': direction,
             'Bin': cbin,
             'Merge_Status': 'Simple',
-            'Transition_Type': is_spiral
+            'Transition_Type': is_spiral,
+            **_tangent_fields(xs, ys, s, e, float(delta), radius, spacing_m),
         })
     return curves
 
-def merge_horizontal_curves(curves: List[Dict], params: Dict) -> List[Dict]:
+def merge_horizontal_curves(curves: List[Dict], params: Dict,
+                            coords_m_smooth: List[Tuple[float, float]], spacing_m: float) -> List[Dict]:
+    """
+    Joins same-direction curves separated by a short gap (MERGE_GAP_FLOOR_FT,
+    MERGE_GAP_PCT) into one compound curve. coords_m_smooth and spacing_m
+    are the smoothed line the curves were found on (as given to
+    analyze_horizontal_curvature); the radius (arc_radius), class, tangent
+    lengths and PI of a merged curve are measured again over its whole
+    extent.
+    """
     if not curves:
         return []
+    headings_array = calculate_headings(list(coords_m_smooth))
+    xs = np.array([c[0] for c in coords_m_smooth], dtype=float)
+    ys = np.array([c[1] for c in coords_m_smooth], dtype=float)
     curves = sorted(curves, key=lambda c: c['Start_Dist'])
     merged = [curves[0].copy()]
     for nxt in curves[1:]:
@@ -4640,12 +4816,6 @@ def merge_horizontal_curves(curves: List[Dict], params: Dict) -> List[Dict]:
         gap_threshold_ft = max(params['MERGE_GAP_FLOOR_FT'], params['MERGE_GAP_PCT'] * ref_length_ft)
 
         if nxt['Dir'] == cur['Dir'] and gap_ft < gap_threshold_ft:
-            # Radius weighted by each curve's own length (taken before the
-            # merged length replaces cur's).
-            l1 = max(cur['Length_m'], 1e-6)
-            l2 = max(nxt['Length_m'], 1e-6)
-            cur['Radius_m'] = (cur['Radius_m'] * l1 + nxt['Radius_m'] * l2) / (l1 + l2)
-            cur['Radius_ft'] = cur['Radius_m'] * FEET_PER_METER
             cur['End_Dist'] = nxt['End_Dist']
             cur['Length_m'] = cur['End_Dist'] - cur['Start_Dist']
             cur['Length_ft'] = cur['Length_m'] * FEET_PER_METER
@@ -4663,8 +4833,14 @@ def merge_horizontal_curves(curves: List[Dict], params: Dict) -> List[Dict]:
         else:
             merged.append(nxt.copy())
     for c in merged:
-        r = c.get('Min_Radius_m', c['Radius_m'])
-        c['Bin'] = classify_bin(METRIC_R_TO_IMPERIAL_D / r) if (r > 0 and r < 99999) else 'A'
+        if c.get('Merge_Status') == 'Compound':
+            s_i = int(round(c['Start_Dist'] / spacing_m))
+            e_i = min(int(round(c['End_Dist'] / spacing_m)), len(headings_array) - 1)
+            c['Radius_m'] = arc_radius(headings_array, s_i, e_i, spacing_m)
+            c['Radius_ft'] = c['Radius_m'] * FEET_PER_METER
+            r = c['Radius_m']
+            c['Bin'] = classify_bin(METRIC_R_TO_IMPERIAL_D / r) if 0 < r < 99999 else 'A'
+            c.update(_tangent_fields(xs, ys, s_i, e_i, c['Delta'], c['Radius_m'], spacing_m))
     return merged
 
 # -------------------------
