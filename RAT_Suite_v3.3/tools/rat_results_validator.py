@@ -36,7 +36,7 @@ Run by the Unified GUI after an alignment run, or from the command line with
 the file arguments below. Writes qa_validation_report.txt beside the files.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, November 5, 2026
+VERSION: 3.3, November 20, 2026
 """
 import os
 import re
@@ -212,8 +212,11 @@ def validate_grades(df: pd.DataFrame):
     tol_mi = GRADE_JOIN_TOL_FT / 5280.0
     gap_chunks, overlap_chunks = [], []
     group_cols = ["RouteId", "Part"] if "Part" in df.columns else ["RouteId"]
-    work = df.assign(_s=pd.to_numeric(df["Calibrated_Start_MP"], errors="coerce"),
-                     _e=pd.to_numeric(df["Calibrated_End_MP"], errors="coerce"))
+    # Each segment's lower and upper reference points, since a decreasing
+    # reference point plan and profile run lists them high to low.
+    s_mp = pd.to_numeric(df["Calibrated_Start_MP"], errors="coerce")
+    e_mp = pd.to_numeric(df["Calibrated_End_MP"], errors="coerce")
+    work = df.assign(_s=np.fmin(s_mp, e_mp), _e=np.fmax(s_mp, e_mp))
     for key, grp in work.groupby(group_cols):
         grp = grp.sort_values("_s")
         steps = grp["_s"].to_numpy()[1:] - grp["_e"].to_numpy()[:-1]
@@ -254,15 +257,18 @@ def validate_vertices(df: pd.DataFrame):
     group_cols = ["RouteId", "Part"] if has_part else ["RouteId"]
     for key, grp in df.groupby(group_cols):
         rid = key[0] if has_part else key
+        # Reference points run one way along a part: increasing, or
+        # decreasing throughout in a decreasing reference point plan and
+        # profile run.
         mp_diff = pd.to_numeric(grp["Milepost"], errors="coerce").diff().dropna()
-        if (mp_diff < 0).any():
+        if (mp_diff < 0).any() and (mp_diff > 0).any():
             bad_mp_routes.append(str(rid))
 
     bad_mp_routes = sorted(set(bad_mp_routes))
     if bad_mp_routes:
         scope = "within a single continuous chunk" if has_part else "route-wide"
         issues.append(
-            f"Milepost continuity errors (M_i+1 < M_i, {scope}) found on "
+            f"Milepost continuity errors (reference points reverse direction, {scope}) found on "
             f"{len(bad_mp_routes)} routes."
         )
         warnings.append(f"Routes with MP continuity issues: {', '.join(bad_mp_routes[:5])}" + ("..." if len(bad_mp_routes)>5 else ""))
