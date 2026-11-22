@@ -24,7 +24,7 @@ it collects inputs, packages them into a JSON payload, and uses the subprocess
 module to safely execute the suite's CLI scripts in isolated memory environments.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, November 13, 2026
+VERSION: 3.3, November 20, 2026
 """
 
 import os
@@ -676,11 +676,14 @@ class RATUnifiedGUI:
         ttk.Entry(lf_modes, textvariable=self.vars["pp_start_rp"], width=12).grid(row=4, column=1, sticky="w")
         ttk.Label(lf_modes, text="End RP (mi):").grid(row=4, column=2, sticky="e", pady=4)
         ttk.Entry(lf_modes, textvariable=self.vars["pp_end_rp"], width=12).grid(row=4, column=3, sticky="w")
-        ttk.Label(lf_modes, text="Speed Limit (mph):").grid(row=5, column=0, sticky="e", pady=4)
-        ttk.Entry(lf_modes, textvariable=self.vars["pp_speed_mph"], width=12).grid(row=5, column=1, sticky="w")
+        ttk.Label(lf_modes, text="Plan/Profile outputs cover this range (blank: the whole route). A Begin RP "
+                                 "greater than the End RP runs the route in the decreasing reference point direction.",
+                  foreground="#555555", font=("Arial", 8, "italic")).grid(row=5, column=1, columnspan=4, sticky="w")
+        ttk.Label(lf_modes, text="Speed Limit (mph):").grid(row=6, column=0, sticky="e", pady=4)
+        ttk.Entry(lf_modes, textvariable=self.vars["pp_speed_mph"], width=12).grid(row=6, column=1, sticky="w")
         ttk.Label(lf_modes, text="Plan/Profile only, optional (15-80). Blank: HPMS speed limit, else the "
                                  "default for the functional class.",
-                  foreground="#555555", font=("Arial", 8, "italic")).grid(row=5, column=2, columnspan=3, sticky="w")
+                  foreground="#555555", font=("Arial", 8, "italic")).grid(row=6, column=2, columnspan=3, sticky="w")
 
         lf_param_workspace = ttk.LabelFrame(main, text="4) Parameters", padding=12)
         lf_param_workspace.pack(fill=tk.X, pady=6)
@@ -961,6 +964,44 @@ class RATUnifiedGUI:
         except (TypeError, ValueError):
             return str(a).strip().lower() == str(b).strip().lower()
 
+    def _settings_differing_from_defaults(self):
+        """
+        (name, value, default, var) for every processing setting, main and
+        advanced, whose current value differs from its default. Smoothing
+        factors are left out: each tool logs the factors it uses, marked
+        state, national or custom.
+        """
+        current = {}
+        for k, v in self._main_default_values().items():
+            current[k] = (v, self.vars[k])
+        for k, v in self._advanced_default_values().items():
+            if k in self.advanced_defaults:
+                current[k] = (v, self.advanced_defaults[k])
+        out = []
+        for k, (default, var) in current.items():
+            if "smooth_factor" in k.lower():
+                continue
+            value = var.get()
+            if not self._same_value(value, default):
+                out.append((k, value, default, var))
+        return out
+
+    def _log_run_settings(self):
+        """
+        Writes to the Run Log, at the start of each run, every processing
+        setting that differs from its default, so the log alone shows how
+        the run was made.
+        """
+        differs = self._settings_differing_from_defaults()
+        if not differs:
+            logging.info("Processing settings: all at their defaults "
+                         "(smoothing factors are listed by each tool).")
+            return
+        logging.info("Processing settings that differ from the defaults "
+                     "(smoothing factors are listed by each tool):")
+        for k, value, default, _ in differs:
+            logging.info(f"    {k}: {value} (default {default})")
+
     def _check_loaded_settings(self, source: str):
         """
         After settings are loaded from a file, checks the smoothing factors
@@ -970,23 +1011,11 @@ class RATUnifiedGUI:
         default from an earlier version (RETIRED_DEFAULTS), offers to update
         just those to the current defaults.
         """
-        current = {}
-        for k, v in self._main_default_values().items():
-            current[k] = (v, self.vars[k])
-        for k, v in self._advanced_default_values().items():
-            if k in self.advanced_defaults:
-                current[k] = (v, self.advanced_defaults[k])
-
         self._check_state_factors(source)
         self._note_restored_limits(source)
 
         differs, retired = [], []
-        for k, (default, var) in current.items():
-            if "smooth_factor" in k.lower():
-                continue
-            saved = var.get()
-            if self._same_value(saved, default):
-                continue
+        for k, saved, default, var in self._settings_differing_from_defaults():
             differs.append(f"{k}: {saved} (default {default})")
             if any(self._same_value(saved, old) for old in RETIRED_DEFAULTS.get(k, [])):
                 retired.append((k, saved, default, var))
@@ -2046,6 +2075,7 @@ class RATUnifiedGUI:
             run_log_handler, error_counter, run_log_path = self._start_run_log(out_dir)
             params_json, run_params = self._collect_params_json(out_dir)
             logging.info(f"Params saved: {params_json}")
+            self._log_run_settings()
 
             script_dir = os.path.dirname(os.path.abspath(__file__))
             alignment_script = os.path.join(script_dir, "rat_alignment_cli.py")

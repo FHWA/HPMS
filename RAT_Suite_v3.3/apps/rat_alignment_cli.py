@@ -30,7 +30,7 @@ the same output. Elevations come from the USGS 3DEP 1 m DEM, cached in
 align_1m_cache under the DEM directory.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, November 6, 2026
+VERSION: 3.3, November 20, 2026
 """
 import os
 import glob
@@ -314,7 +314,7 @@ def process_chunk(route_id: str, item: dict, dem_dir: str, params: dict,
 
     h_curves = analyze_horizontal_curvature(res["coords_m_smooth"], spacing_m, params)
     if params.get("ENABLE_MERGE", False):
-        h_curves = merge_horizontal_curves(h_curves, params)
+        h_curves = merge_horizontal_curves(h_curves, params, res["coords_m_smooth"], spacing_m)
     v_curves = analyze_vertical_parabolic(z_smooth, spacing_m, params)
     segments = build_grade_segments(z_smooth, spacing_m, v_curves)
 
@@ -338,6 +338,8 @@ def process_chunk(route_id: str, item: dict, dem_dir: str, params: dict,
             c["Part"] = item["part_id"]
             c["Calibrated_Start_MP"] = _mp(c["Start_Dist"])
             c["Calibrated_End_MP"] = _mp(c["End_Dist"])
+            if "PI_Dist" in c:
+                c["PI_MP"] = _mp(c["PI_Dist"])
             c["FSystem"] = item["f_sys"]
             c["geometry"] = _geometry(c["Start_Dist"], c["End_Dist"], f"{kind} curve")
 
@@ -449,7 +451,7 @@ def process_chunk(route_id: str, item: dict, dem_dir: str, params: dict,
 
     # Distances along the route, on the same basis as the vertices' Dist_Mi.
     for c in h_curves + v_curves + g_all:
-        for key in ("Start_Dist", "End_Dist", "SC_Dist", "CS_Dist", "VPI_Dist"):
+        for key in ("Start_Dist", "End_Dist", "SC_Dist", "CS_Dist", "PI_Dist", "VPI_Dist"):
             if key in c and c[key] is not None and not pd.isna(c[key]):
                 c[key] += offset_m
     h_all.extend(h_curves)
@@ -596,6 +598,8 @@ H_TOOLTIP_FIELDS = [
     ("Radius_ft", "Radius (ft)", 0),
     ("Min_Radius_ft", "Min Radius (ft)", 0),
     ("Delta", "Delta (deg)", 1),
+    ("Tangent_ft", "Tangent T (ft)", 0),
+    ("PI_MP", "PI RP", 3),
     ("Dir", "Direction", None),
     ("Length_ft", "Length (ft)", 0),
     ("Transition_Type", "Transition", None),

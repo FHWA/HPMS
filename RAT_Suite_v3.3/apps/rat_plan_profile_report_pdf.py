@@ -32,10 +32,18 @@ page shows only the route, milepost range and date. Terrain pages and
 plan-view relief come from the cached 1 m DEM tiles, and cross-section
 sheets from the *_cross_sections.csv files, when present.
 
+The PDF covers the vertices in the CSV, which rat_plan_profile_cli.py limits
+to the Begin/End RP entered. Its file name and the cover page's reference
+point range use the range in the vertices file name. In a decreasing
+reference point run (Begin RP greater than End RP) the sheets follow the
+vertices in that direction of travel, the profile's reference point axis
+runs from high to low, and the cover page says so.
+
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, November 6, 2026
+VERSION: 3.3, November 20, 2026
 """
 import os
+import re
 import sys
 import argparse
 import math
@@ -68,6 +76,11 @@ except Exception:
     # The PDF can still be made from the CSVs alone; the cover page then
     # omits the run parameters.
     load_run_param_summary_json = None
+try:
+    from core.rat_core import curve_tangents
+except Exception:
+    # Without core the sheets are drawn without the PI and tangent lines.
+    curve_tangents = None
 try:
     from core.rat_dem_relief import (
         read_dem_window, hillshade_rgb, draw_relief, padded_lonlat_box, tiles_cover_route,
@@ -102,6 +115,7 @@ XS_BELOW_ROADWAY_FT = 35.0      # how much of that height lies below the (lower)
 XS_TOP_CLEARANCE_FT = 8.0       # least room above the higher roadway
 XS_MARK_PLAN_VIEW = True        # mark cross-section stations on the plan views
 PLAN_SHOW_OTHER_ROUTES = True   # draw and label the other HPMS routes around the section
+PLAN_SHOW_PI = True             # mark each curve's PI, with the tangents to it dashed
                                 # (other direction, ramps, crossing and frontage roads)
                                 # from the *_nearby_lines.csv rat_plan_profile_cli.py writes
 
@@ -401,14 +415,17 @@ def _draw_cross_section(ax, st, prof, curve_info):
 
 
 def add_cross_section_sheets(pdf, stations, profiles, route_id, hc, date_str):
-    """Cross-section sheets, XS_PER_SHEET sections per sheet, in milepost order."""
+    """Cross-section sheets, XS_PER_SHEET sections per sheet, in the order
+    of the run (decreasing reference point order in a decreasing run), each
+    viewed looking in the direction of travel."""
     curve_info = {}
     if hc is not None and not hc.empty and "Curve_No" in hc.columns:
         for _, c in hc.iterrows():
-            r = c.get("Min_Radius_m", c.get("Radius_m", np.nan)) * FEET_PER_METER
+            r = c.get("Radius_m", np.nan) * FEET_PER_METER
             curve_info[int(c["Curve_No"])] = f"{c.get('Dir', '')}, R {r:,.0f} ft"
     groups = {sid: g for sid, g in profiles.groupby("Station_ID")}
     stations = stations.sort_values("Dist_Ft").reset_index(drop=True)
+    decreasing = len(stations) > 1 and stations["Milepost"].iloc[-1] < stations["Milepost"].iloc[0]
     n_sheets = int(math.ceil(len(stations) / XS_PER_SHEET))
     for k in range(n_sheets):
         chunk = stations.iloc[k * XS_PER_SHEET:(k + 1) * XS_PER_SHEET]
@@ -417,7 +434,7 @@ def add_cross_section_sheets(pdf, stations, profiles, route_id, hc, date_str):
                                  facecolor='none', transform=fig.transFigure))
         fig.text(0.05, 0.94, f"CROSS SECTIONS: {route_id}", fontsize=14, fontweight='bold')
         fig.text(0.05, 0.915, "Bare-earth ground from the USGS 3DEP 1 m DEM, looking in the direction of "
-                 "increasing milepost. Horizontal and vertical scales are equal; offsets in feet from the "
+                 f"{'decreasing' if decreasing else 'increasing'} reference point. Horizontal and vertical scales are equal; offsets in feet from the "
                  "roadway centerline (CL).", fontsize=8.5, color="#444444")
         fig.text(0.85, 0.05, f"XS SHEET {k + 1} OF {n_sheets}", fontsize=14, fontweight='bold')
         fig.text(0.85, 0.035, f"DATE: {date_str}", fontsize=10)
@@ -440,9 +457,11 @@ def add_cross_section_sheets(pdf, stations, profiles, route_id, hc, date_str):
 
 def add_cover_page(pdf: PdfPages, route_id: str, mp_start: float, mp_end: float,
                     num_pages: int, date_str: str, param_summary: dict = None,
-                    overview_lon: np.ndarray = None, overview_lat: np.ndarray = None) -> None:
+                    overview_lon: np.ndarray = None, overview_lat: np.ndarray = None,
+                    first_rp: float = None, last_rp: float = None) -> None:
     """
-    Cover page (first page, landscape): route, milepost range, run date,
+    Cover page (first page, landscape): route, milepost range and direction
+    (mp_start to mp_end, in the direction of the run), run date,
     sheet count and, when available, the records processed (county,
     facility types, owners) and the run's parameters on the left; an
     overview map of the route on the right. The sheets that follow then
@@ -456,8 +475,13 @@ def add_cover_page(pdf: PdfPages, route_id: str, mp_start: float, mp_end: float,
     overview_lon/overview_lat is the route centerline for the right-hand
     overview map, drawn over the USGS Topo basemap in Web Mercator. If the
     basemap can't be fetched the centerline is drawn alone; if there is no
-    centerline a placeholder is shown.
+    centerline a placeholder is shown. Its start and end markers are labeled
+    with first_rp and last_rp (the first and last sheet points, which can
+    lie a little past mp_start and mp_end to show a whole curve), else with
+    mp_start and mp_end.
     """
+    first_rp = mp_start if first_rp is None else first_rp
+    last_rp = mp_end if last_rp is None else last_rp
     fig = plt.figure(figsize=(17, 11))
     fig.patch.set_facecolor("white")
 
@@ -478,6 +502,10 @@ def add_cover_page(pdf: PdfPages, route_id: str, mp_start: float, mp_end: float,
     y -= 0.029
     fig.text(LX, y, "Reference Point Range:", fontsize=13, fontweight='bold')
     fig.text(LX + LABEL_W, y, f"{mp_start:.3f} to {mp_end:.3f}", fontsize=13)
+    y -= 0.029
+    fig.text(LX, y, "Direction:", fontsize=13, fontweight='bold')
+    fig.text(LX + LABEL_W, y, ("decreasing reference point" if mp_end < mp_start
+                               else "increasing reference point"), fontsize=13)
     y -= 0.029
     fig.text(LX, y, "Run Date:", fontsize=13, fontweight='bold'); fig.text(LX + LABEL_W, y, str(date_str), fontsize=13)
     y -= 0.029
@@ -520,7 +548,7 @@ def add_cover_page(pdf: PdfPages, route_id: str, mp_start: float, mp_end: float,
             y -= 0.022
         y += 0.022
 
-    y -= 0.035
+    y -= 0.025
     fig.text(LX, y, "-" * 62, fontsize=9, color='#999999')
 
     if param_summary:
@@ -528,7 +556,7 @@ def add_cover_page(pdf: PdfPages, route_id: str, mp_start: float, mp_end: float,
         adv_items = param_summary.get("advanced", [])
         fs_overrides = param_summary.get("fs_overrides", [])
 
-        y -= 0.035
+        y -= 0.03
         fig.text(LX, y, "Run Parameters", fontsize=15, fontweight='bold')
         y -= 0.029
         fig.text(LX, y, "Core Parameters", fontsize=12, fontweight='bold', color='#2c3e50')
@@ -629,9 +657,9 @@ def add_cover_page(pdf: PdfPages, route_id: str, mp_start: float, mp_end: float,
 
             ax_map.plot(mx, my, color='#1f5fd1', linewidth=2.2, zorder=2)
             ax_map.scatter([mx[0]], [my[0]], color='#1a9641', s=45, zorder=3,
-                           edgecolor='black', linewidth=0.6, label=f"Start (RP {mp_start:.3f})")
+                           edgecolor='black', linewidth=0.6, label=f"Start (RP {first_rp:.3f})")
             ax_map.scatter([mx[-1]], [my[-1]], color='#d7191c', s=45, zorder=3,
-                           edgecolor='black', linewidth=0.6, label=f"End (RP {mp_end:.3f})")
+                           edgecolor='black', linewidth=0.6, label=f"End (RP {last_rp:.3f})")
             ax_map.legend(loc='upper right', fontsize=7, framealpha=0.9)
             ax_map.set_xlim(x0, x1)
             ax_map.set_ylim(y0, y1)
@@ -927,6 +955,79 @@ def vc_ssd_line(v) -> str:
     return f"\nSSD={ssd:.0f}' ({speed_txt})"
 
 
+def curve_pi_points(hc, x_ft, y_ft, dist_ft) -> dict:
+    """{row index: (start x, start y, PI x, PI y, end x, end y)} in the
+    route's projected feet, for each horizontal curve whose end tangents
+    meet (curve_tangents). Found once from the whole route, so a PI is
+    drawn on every sheet it falls on, even when the curve runs onto the
+    next sheet."""
+    out = {}
+    if curve_tangents is None or hc is None or hc.empty or len(dist_ft) < 3:
+        return out
+    for idx, c in hc.iterrows():
+        s = int(np.clip(np.searchsorted(dist_ft, c['Start_Dist'] * FEET_PER_METER), 0, len(dist_ft) - 1))
+        e = int(np.clip(np.searchsorted(dist_ft, c['End_Dist'] * FEET_PER_METER), 0, len(dist_ft) - 1))
+        if e - s < 2:
+            continue
+        t_in, _ = curve_tangents(x_ft, y_ft, s, e, float(c.get('Delta', 180.0)))
+        if not np.isfinite(t_in):
+            continue
+        ux, uy = x_ft[s + 1] - x_ft[s], y_ft[s + 1] - y_ft[s]
+        n = math.hypot(ux, uy)
+        if n < 1e-9:
+            continue
+        out[idx] = (x_ft[s], y_ft[s], x_ft[s] + t_in * ux / n, y_ft[s] + t_in * uy / n, x_ft[e], y_ft[e])
+    return out
+
+
+def draw_pi(ax, pts, origin_x, origin_y, angle, y_shift):
+    """Marks a curve's PI on a plan view, with the tangents from the curve's
+    start and end to it dashed, as on design plans. pts is a curve_pi_points
+    entry; the sheet's rotation is applied here. Parts off the sheet are
+    clipped."""
+    qx, qy = rotate_points(np.array(pts[0::2]), np.array(pts[1::2]), origin_x, origin_y, -angle)
+    qy = qy - y_shift
+    ax.plot(qx, qy, color='0.3', linestyle=(0, (4, 3)), linewidth=0.8, zorder=2.5, clip_on=True)
+    ax.plot([qx[1]], [qy[1]], marker='^', color='0.15', markersize=5, zorder=4, clip_on=True)
+    ax.annotate("PI", (qx[1], qy[1]), xytext=(0, 5), textcoords='offset points', ha='center',
+                fontsize=7, color='0.15', zorder=4, annotation_clip=True)
+
+
+def horizontal_callout(c) -> str:
+    """Plan-view callout text for one horizontal curve, in the order of a
+    curve data block on design plans: curve number, direction and class;
+    PI reference point; deflection and radius; tangent and length; measured
+    superelevation; reference points of the curve's ends. T is the tangent
+    length of a circular curve with the radius and deflection shown
+    (R tan(Delta/2)); the PI is where the tangents at the curve's two ends
+    meet. Lines whose values are missing (older runs, or a deflection too
+    large for a PI) are left out."""
+    def num(key):
+        x = c.get(key, np.nan)
+        return float(x) if pd.notna(x) else np.nan
+
+    is_spiral = c.get('Transition_Type', 'Simple') == 'Spiral'
+    start_label, end_label = ("TS", "ST") if is_spiral else ("PC", "PT")
+    head = f"Curve {int(c['Curve_No'])}  " if pd.notna(c.get('Curve_No', np.nan)) else ""
+    head += f"{c.get('Dir', '')}{' (spiral)' if is_spiral else ''}  Class {c.get('Bin', 'A')}"
+    lines = [head]
+    pi_mp = num('PI_MP')
+    if pd.notna(pi_mp):
+        lines.append(f"PI: RP {pi_mp:.3f}")
+    r_ft = num('Radius_m') * FEET_PER_METER
+    lines.append(f"\u0394={num('Delta'):.1f}\u00b0  R={r_ft:,.0f}'")
+    t_ft = num('Tangent_ft')
+    l_ft = num('Length_m') * FEET_PER_METER
+    lines.append((f"T={t_ft:,.0f}'  " if pd.notna(t_ft) else "") + f"L={l_ft:,.0f}'")
+    if c.get('Superelevation_Note', '') == "NC":
+        lines.append("e=NC (DEM)")
+    elif pd.notna(num('Superelevation_Meas_Pct')):
+        lines.append(f"e={num('Superelevation_Meas_Pct'):.1f}% (DEM)")
+    lines.append(f"{start_label}: RP {num('Calibrated_Start_MP'):.3f}")
+    lines.append(f"{end_label}: RP {num('Calibrated_End_MP'):.3f}")
+    return off_road_line(c) + "\n".join(lines)
+
+
 def place_callouts(fig, ax, callouts, obstacles=(), line=None):
     """Draws curve callouts (text, (x, y) anchor in data units, preferred
     side +1 above / -1 below) inside ax, each placed at the first of a
@@ -952,7 +1053,9 @@ def place_callouts(fig, ax, callouts, obstacles=(), line=None):
         h = min(a.y1, b.y1) - max(a.y0, b.y0)
         return w * h if w > 0 and h > 0 else 0.0
 
-    for text, (x, y), side in sorted(callouts, key=lambda c: c[1][0]):
+    # Left to right on the sheet (by display position, since the profile's
+    # reference point axis is reversed in a decreasing run).
+    for text, (x, y), side in sorted(callouts, key=lambda c: ax.transData.transform(c[1])[0]):
         ann = ax.annotate(text, (x, y), xytext=(0, 0), textcoords='offset points', ha='center',
                           arrowprops=dict(arrowstyle="->"), bbox=dict(boxstyle="round", fc="white"),
                           zorder=7, annotation_clip=False)
@@ -1024,7 +1127,9 @@ def draw_elevation_strip(ax_strip, ax_prof, sub_dist, sub_mp, sub_elev, sub_raw_
     x0, x1 = ax_prof.get_xlim()
     for d in stations:
         mp = float(np.interp(d, sub_dist, sub_mp))
-        if mp - x0 < 0.012 * (x1 - x0):
+        # Fraction of the way across the axis (x1 < x0 where the axis is
+        # reversed for a decreasing reference point run).
+        if (mp - x0) / (x1 - x0) < 0.012:
             continue
         grade = float(np.interp(d, sub_dist, sub_elev))
         ground = float(np.interp(d, sub_dist, sub_raw_elev))
@@ -1063,6 +1168,7 @@ def make_pdf(vertices_csv, horizontal_csv, vertical_csv, pdf_out, route_id, dem_
     dist_ft = vtx["Dist_Ft"].to_numpy()
     elev_ft = vtx["Elev_Ft"].to_numpy()
     mp_array = vtx["Milepost"].to_numpy()
+    pi_points = curve_pi_points(hc, x_ft, y_ft, dist_ft) if PLAN_SHOW_PI else {}
 
     elev_interval = profile_elev_interval_ft or PROFILE_ELEV_INTERVAL_FT
     if elev_interval is not None and elev_interval <= 0:
@@ -1088,8 +1194,19 @@ def make_pdf(vertices_csv, horizontal_csv, vertical_csv, pdf_out, route_id, dem_
     num_pages = max(1, int(math.ceil(total_dist / PAGE_LENGTH_FT)))
     date_str = datetime.datetime.now().strftime("%Y-%m-%d")
 
-    global_mp_start = mp_array.min()
-    global_mp_end = mp_array.max()
+    # Reference point range, in the direction of the run: the Begin/End RP
+    # in the vertices file name (rat_plan_profile_cli.py names its files by
+    # the range entered), else the first and last vertices. The sheets can
+    # run a little past it to show a whole curve.
+    first_rp, last_rp = float(mp_array[0]), float(mp_array[-1])
+    m_rp = re.search(r"_MP_(-?\d+(?:\.\d+)?)_to_(-?\d+(?:\.\d+)?)_vertices\.csv$",
+                     os.path.basename(vertices_csv))
+    if m_rp:
+        global_mp_start, global_mp_end = float(m_rp.group(1)), float(m_rp.group(2))
+    else:
+        global_mp_start, global_mp_end = first_rp, last_rp
+    decreasing = last_rp < first_rp
+    rp_dir = -1.0 if decreasing else 1.0
 
     base_dir = os.path.dirname(pdf_out)
     base_name, ext = os.path.splitext(os.path.basename(pdf_out))
@@ -1137,7 +1254,8 @@ def make_pdf(vertices_csv, horizontal_csv, vertical_csv, pdf_out, route_id, dem_
 
     with PdfPages(new_pdf_out) as pdf:
         add_cover_page(pdf, route_id, global_mp_start, global_mp_end, num_pages, cover_date_str, param_summary,
-                        overview_lon=overview_lon, overview_lat=overview_lat)
+                        overview_lon=overview_lon, overview_lat=overview_lat,
+                        first_rp=first_rp, last_rp=last_rp)
 
         if tile_dir and (TERRAIN_OVERVIEW_PAGE or TERRAIN_SECTION_PAGES):
             try:
@@ -1147,18 +1265,21 @@ def make_pdf(vertices_csv, horizontal_csv, vertical_csv, pdf_out, route_id, dem_
                          if 'Structure_Kind' in vtx.columns else None)
 
                 sections = []
-                if TERRAIN_SECTION_PAGES and (global_mp_end - global_mp_start) > TERRAIN_SECTION_MILES * 1.2:
-                    n_sec = int(math.ceil((global_mp_end - global_mp_start) / TERRAIN_SECTION_MILES))
+                # Sections run in the direction of the run, over the
+                # reference points the sheets cover.
+                span_mi = abs(last_rp - first_rp)
+                if TERRAIN_SECTION_PAGES and span_mi > TERRAIN_SECTION_MILES * 1.2:
+                    n_sec = int(math.ceil(span_mi / TERRAIN_SECTION_MILES))
                     for k_sec in range(n_sec):
-                        s0 = global_mp_start + k_sec * TERRAIN_SECTION_MILES
-                        s1 = min(global_mp_end, s0 + TERRAIN_SECTION_MILES)
-                        m = (mp_array >= s0) & (mp_array <= s1)
+                        s0 = first_rp + rp_dir * k_sec * TERRAIN_SECTION_MILES
+                        s1 = first_rp + rp_dir * min(span_mi, (k_sec + 1) * TERRAIN_SECTION_MILES)
+                        m = (mp_array >= min(s0, s1)) & (mp_array <= max(s0, s1))
                         if m.sum() >= 2:
                             sections.append((f"{chr(65 + k_sec) if k_sec < 26 else k_sec + 1}: RP {s0:.2f}-{s1:.2f}",
                                              m, terrain_map_box(tile_dir, all_lon[m], all_lat[m])))
 
                 if TERRAIN_OVERVIEW_PAGE:
-                    sub_t = (f"RP {global_mp_start:.3f} to {global_mp_end:.3f}"
+                    sub_t = (f"RP {first_rp:.3f} to {last_rp:.3f}"
                              + (f"   --   dashed boxes show the {len(sections)} section pages that follow" if sections else ""))
                     add_terrain_page(pdf, f"TERRAIN OVERVIEW: {route_id}", sub_t, all_lon, all_lat,
                                      mp_array, kinds, tile_dir, TERRAIN_OVERVIEW_MAX_PX,
@@ -1209,11 +1330,16 @@ def make_pdf(vertices_csv, horizontal_csv, vertical_csv, pdf_out, route_id, dem_
                 rot_y = rot_y - y_shift
                 raw_rot_y = raw_rot_y - y_shift
 
+                # Profile axis: from the sheet's first reference point, one
+                # sheet length in the direction of the run (high to low in
+                # a decreasing reference point run).
                 mp_min, mp_max = sub_mp.min(), sub_mp.max()
                 page_mp_span = mp_max - mp_min
                 page_dist = sub_dist[-1] - sub_dist[0]
                 if page_dist > 0:
                     page_mp_span = (PAGE_LENGTH_FT / page_dist) * (mp_max - mp_min)
+                prof_x0 = sub_mp[0]
+                prof_x1 = sub_mp[0] + rp_dir * page_mp_span
 
                 fig = plt.figure(figsize=(17, 11))
                 rect = Rectangle((0.02, 0.02), 0.96, 0.96, linewidth=2, edgecolor='black', facecolor='none', transform=fig.transFigure)
@@ -1244,7 +1370,7 @@ def make_pdf(vertices_csv, horizontal_csv, vertical_csv, pdf_out, route_id, dem_
                 plan_callouts = []
                 colors_h = {'Left': 'blue', 'Right': 'red'}
                 if not hc.empty:
-                    for _, c in hc.iterrows():
+                    for c_idx, c in hc.iterrows():
                         c_start_ft = c['Start_Dist'] * FEET_PER_METER
                         c_end_ft = c['End_Dist'] * FEET_PER_METER
                         c_mask = (sub_dist >= c_start_ft) & (sub_dist <= c_end_ft)
@@ -1257,19 +1383,9 @@ def make_pdf(vertices_csv, horizontal_csv, vertical_csv, pdf_out, route_id, dem_
                             mid_i = len(c_x) // 2
                             label_x = c_x[mid_i]
 
-                            min_r_ft = c.get('Min_Radius_m', c.get('Radius_m', 0)) * FEET_PER_METER
-                            is_spiral = c.get('Transition_Type', 'Simple') == 'Spiral'
-                            start_label = "TS" if is_spiral else "PC"
-                            end_label = "ST" if is_spiral else "PT"
-                            spiral_tag = "[SPIRAL]\n" if is_spiral else ""
-
-                            e_meas = c.get('Superelevation_Meas_Pct', np.nan)
-                            if c.get('Superelevation_Note', '') == "NC":
-                                e_line = "\ne=NC (DEM)"
-                            else:
-                                e_line = f"\ne={e_meas:.1f}% (DEM)" if pd.notna(e_meas) else ""
-                            curve_tag = f"Curve {int(c['Curve_No'])}  " if pd.notna(c.get('Curve_No', np.nan)) else ""
-                            annot = f"{off_road_line(c)}{spiral_tag}{curve_tag}{c.get('Dir', '')}\nClass {c.get('Bin', 'A')}\nMin R={min_r_ft:.0f}'\nΔ={c['Delta']:.1f}°\nL={c.get('Length_m', 0)*FEET_PER_METER:.0f}'{e_line}\n{start_label}: RP {c.get('Calibrated_Start_MP', 0):.3f}\n{end_label}: RP {c.get('Calibrated_End_MP', 0):.3f}"
+                            if c_idx in pi_points:
+                                draw_pi(ax_plan, pi_points[c_idx], p_start_x, p_start_y, angle, y_shift)
+                            annot = horizontal_callout(c)
 
                             plan_callouts.append((annot, (label_x, c_y[mid_i]), 1 if c['Dir'] == "Right" else -1))
 
@@ -1393,7 +1509,7 @@ def make_pdf(vertices_csv, horizontal_csv, vertical_csv, pdf_out, route_id, dem_
                 ax_prof.set_ylabel("Elevation (ft)")
                 ax_prof.set_xlabel("Reference Point")
 
-                ax_prof.set_xlim(mp_min, mp_min + page_mp_span)
+                ax_prof.set_xlim(prof_x0, prof_x1)
                 ax_prof.set_ylim(avg_elev - 100, avg_elev + 100)
                 ax_prof.grid(True, linestyle='--', alpha=0.5)
 
@@ -1413,7 +1529,7 @@ def make_pdf(vertices_csv, horizontal_csv, vertical_csv, pdf_out, route_id, dem_
                                          dist_origin, elev_interval)
                     ax_strip.set_xlabel("Reference Point")
                     ax_strip.ticklabel_format(useOffset=False, style='plain', axis='x')
-                    ax_strip.set_xlim(mp_min, mp_min + page_mp_span)
+                    ax_strip.set_xlim(prof_x0, prof_x1)
 
                 place_callouts(fig, ax_plan, plan_callouts, (plan_legend, ax_inset), (rot_x, rot_y))
                 place_callouts(fig, ax_prof, prof_callouts, (prof_legend,), (sub_mp, sub_elev))

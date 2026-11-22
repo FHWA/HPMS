@@ -33,8 +33,19 @@ The analytics dashboard's ride-quality chart puts Micro Jitter (a height
 in inches) on its own right-hand axis, separate from IRI Reported (in/mi)
 on the left, because the two have different units.
 
+Begin/End RP (--start/--end): the records overlapping the range are
+processed whole, so the smoothing and curve fitting see the road on both
+sides of each limit, and the outputs (vertices, curve and grade tables,
+cross sections, structure spans, dashboards) are then limited to the
+range. A curve crossing a limit is kept whole when its midpoint is inside
+the range, so the outputs can run a short way past a limit to show it. A
+Begin RP greater than the End RP runs the route in the decreasing
+reference point direction: the road is processed in that direction of
+travel (curve direction, cross-section sides, grade signs and sight
+distance), and the tables list reference points in decreasing order.
+
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, November 6, 2026
+VERSION: 3.3, November 20, 2026
 """
 import os
 import sys
@@ -44,6 +55,7 @@ import argparse
 import logging
 import numpy as np
 import pandas as pd
+from shapely.geometry import LineString
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -209,23 +221,101 @@ def flag_line_off_road(ranges, h_curves, v_curves, segments, vtx_df):
     """Marks curves, grade segments and vertices that overlap a stretch
     where the cross sections show the HPMS line off the roadway
     (core.rat_cross_section.flag_line_off_road). Their geometry there
-    describes the ground beside the road, not the road."""
+    describes the ground beside the road, not the road. The ranges and
+    curves run in the direction of the run, so reference points decrease
+    along them in a decreasing reference point run; the overlap test uses
+    each one's lower and upper reference points."""
+    spans = [(min(a, b), max(a, b)) for a, b in ranges]
     for rows in (h_curves, v_curves, segments):
         for r in rows:
-            r["Line_Off_Road"] = any(r["Calibrated_Start_MP"] < hi and r["Calibrated_End_MP"] > lo
-                                     for lo, hi in ranges)
+            r_lo = min(r["Calibrated_Start_MP"], r["Calibrated_End_MP"])
+            r_hi = max(r["Calibrated_Start_MP"], r["Calibrated_End_MP"])
+            r["Line_Off_Road"] = any(r_lo < hi and r_hi > lo for lo, hi in spans)
     mp = vtx_df["Milepost"].to_numpy()
     on = np.zeros(len(mp), dtype=bool)
-    for lo, hi in ranges:
+    for lo, hi in spans:
         on |= (mp >= lo) & (mp <= hi)
     vtx_df["Line_Off_Road"] = on
-    for lo, hi in ranges:
-        logging.warning(f"QA/QC FLAG: the HPMS line appears to be off the roadway from MP {lo:.3f} to "
-                        f"{hi:.3f} (cross sections find no lanes at the line and the centerline far "
+    for a, b in ranges:
+        logging.warning(f"QA/QC FLAG: the HPMS line appears to be off the roadway from RP {a:.3f} to "
+                        f"{b:.3f} (cross sections find no lanes at the line and the centerline far "
                         f"from it). Curves and grades there follow the ground beside the road; check "
                         f"the line work against current imagery.")
     if not ranges:
         logging.info("QA/QC: Cross sections find the HPMS line on the roadway throughout.")
+
+
+def orient_chunks(all_chunks: list, decreasing: bool) -> list:
+    """Sets each chunk's first and last reference point in the direction of
+    the run (rp_first, rp_last) and its distance from the start of the run
+    (global_start_dist_m). For an increasing run the chunks are unchanged
+    (distance starts at the route's first reference point, in meters, as
+    build_route_continuity_chunks sets it). For a decreasing run the chunk
+    order and each chunk's geometry are reversed, so the road is processed
+    in that direction of travel, and distance is measured from the highest
+    reference point processed."""
+    if not decreasing:
+        for info in all_chunks:
+            info["rp_first"], info["rp_last"] = info["chunk_low_mp"], info["chunk_high_mp"]
+        return all_chunks
+    out = []
+    dist_m = 0.0
+    for info in reversed(all_chunks):
+        info = dict(info)
+        info["geom"] = LineString(list(info["geom"].coords)[::-1])
+        info["rp_first"], info["rp_last"] = info["chunk_high_mp"], info["chunk_low_mp"]
+        info["global_start_dist_m"] = dist_m
+        dist_m += info["length_m"]
+        out.append(info)
+    return out
+
+
+def limit_to_range(vtx_df: pd.DataFrame, h_curves: list, v_curves: list, segments: list,
+                   rp_lo: float, rp_hi: float):
+    """Limits the run's outputs to the Begin/End RP range [rp_lo, rp_hi]
+    after the records overlapping it were processed whole. Curves whose
+    midpoint is inside the range are kept whole, and the vertices run from
+    the range's first point (or the start of a kept curve crossing that
+    limit) to its last point (or the end of a kept curve). Grade segments
+    are cut at the ends of the kept vertices. Returns the limited vertices,
+    curves and segments."""
+    mp = vtx_df["Milepost"].to_numpy(dtype=float)
+    dist_ft = vtx_df["Dist_Ft"].to_numpy(dtype=float)
+    inside = (mp >= rp_lo) & (mp <= rp_hi)
+    if not inside.any():
+        raise ValueError(f"No processed points fall between RP {rp_lo:g} and RP {rp_hi:g}.")
+
+    def mid_inside(c):
+        mid = (c["Calibrated_Start_MP"] + c["Calibrated_End_MP"]) / 2.0
+        return rp_lo <= mid <= rp_hi
+
+    h_keep = [c for c in h_curves if mid_inside(c)]
+    v_keep = [c for c in v_curves if mid_inside(c)]
+    d_lo, d_hi = dist_ft[inside].min(), dist_ft[inside].max()
+    for c in h_keep + v_keep:
+        d_lo = min(d_lo, c["Start_Dist"] * FEET_PER_METER)
+        d_hi = max(d_hi, c["End_Dist"] * FEET_PER_METER)
+    keep = (dist_ft >= d_lo - 1e-6) & (dist_ft <= d_hi + 1e-6)
+    out_vtx = vtx_df.loc[keep].reset_index(drop=True)
+
+    # Grade segments overlapping the kept vertices, cut at their ends.
+    kd, km = out_vtx["Dist_Ft"].to_numpy(dtype=float), out_vtx["Milepost"].to_numpy(dtype=float)
+    g_keep = []
+    for g in segments:
+        s_ft, e_ft = g["Start_Dist"] * FEET_PER_METER, g["End_Dist"] * FEET_PER_METER
+        if e_ft <= kd[0] or s_ft >= kd[-1]:
+            continue
+        g = dict(g)
+        if s_ft < kd[0]:
+            g["Start_Dist"] = kd[0] / FEET_PER_METER
+            g["Calibrated_Start_MP"] = float(km[0])
+        if e_ft > kd[-1]:
+            g["End_Dist"] = kd[-1] / FEET_PER_METER
+            g["Calibrated_End_MP"] = float(km[-1])
+        g["Length_m"] = g["End_Dist"] - g["Start_Dist"]
+        g["Length_ft"] = g["Length_m"] * FEET_PER_METER
+        g_keep.append(g)
+    return out_vtx, h_keep, v_keep, g_keep
 
 
 def safe_route_name(route_id: str) -> str:
@@ -320,7 +410,11 @@ def generate_interactive_profile(df_vtx, df_h, df_v, out_path, route_id, params=
     Without IRI data the row has one axis, for Micro Jitter: an axis with
     no trace on it stops plotly.js from drawing the page once the range
     slider is added.
+
+    In a decreasing reference point run the reference point axis is
+    reversed, so the road reads left to right in the direction of travel.
     """
+    decreasing = len(df_vtx) > 1 and df_vtx["Milepost"].iloc[-1] < df_vtx["Milepost"].iloc[0]
     has_iri = 'IRI_Reported' in df_vtx.columns and df_vtx['IRI_Reported'].notna().any()
     # Rows: 1 curvature, 2 elevation and sight distance, 3 ride quality
     # (with a second y-axis for Micro Jitter where IRI is shown).
@@ -416,10 +510,13 @@ def generate_interactive_profile(df_vtx, df_h, df_v, out_path, route_id, params=
 
     # Milepost axis label and range slider
     fig.update_xaxes(
-        title_text="Calibrated Reference Post (Milepost)",
+        title_text="Calibrated Reference Post (Milepost)"
+                   + (", decreasing direction" if decreasing else ""),
         rangeslider=dict(visible=True),
         row=3, col=1
     )
+    if decreasing:
+        fig.update_xaxes(autorange="reversed")
 
     fig.write_html(out_path)
 
@@ -470,10 +567,15 @@ def generate_interactive_profile(df_vtx, df_h, df_v, out_path, route_id, params=
 
         xMin = parseFloat(xMin);
         xMax = parseFloat(xMax);
+        // A reversed axis (decreasing reference point run) gives the range
+        // high to low.
+        if (xMin > xMax) { var t = xMin; xMin = xMax; xMax = t; }
 
         // Find traces on row 2 (yaxis2) — Smooth Profile and Raw DEM
+        // _fullData holds the decoded arrays: plotly.py 6 and later write
+        // the trace data as encoded binary, which plotDiv.data keeps as is.
         var yVals = [];
-        plotDiv.data.forEach(function(trace) {
+        (plotDiv._fullData || plotDiv.data).forEach(function(trace) {
             if (trace.yaxis !== 'y2') return; // We only want row 2 (Elevation)
             // Only consider elevation traces (not markers)
             if (trace.mode && trace.mode.indexOf('markers') !== -1) return;
@@ -509,8 +611,9 @@ def generate_interactive_profile(df_vtx, df_h, df_v, out_path, route_id, params=
     # Run-parameters corner panel (core.rat_param_summary)
     if params is not None:
         try:
-            mp_start = float(df_vtx["Milepost"].min()) if "Milepost" in df_vtx.columns and not df_vtx.empty else None
-            mp_end = float(df_vtx["Milepost"].max()) if "Milepost" in df_vtx.columns and not df_vtx.empty else None
+            # First and last points, in the direction of the run.
+            mp_start = float(df_vtx["Milepost"].iloc[0]) if "Milepost" in df_vtx.columns and not df_vtx.empty else None
+            mp_end = float(df_vtx["Milepost"].iloc[-1]) if "Milepost" in df_vtx.columns and not df_vtx.empty else None
             param_summary = build_run_param_summary(
                 params, route_id=route_id, mp_start=mp_start, mp_end=mp_end, include_fsystem=False,
                 speed_mph=entered_speed(params), sight_warning_ft=sight_warning_ft)
@@ -592,25 +695,38 @@ def main():
     if sub.empty:
         raise ValueError(f"No records found for route: {args.route}")
 
-    if args.start is not None or args.end is not None:
-        clip_s = float(args.start) if args.start is not None else float(sub["Start_MP"].min())
-        clip_e = float(args.end) if args.end is not None else float(sub["End_MP"].max())
-        if clip_e < clip_s:
-            raise ValueError(f"Invalid RP range: end ({clip_e}) < start ({clip_s})")
+    # Begin/End RP. A Begin RP greater than the End RP runs the route in
+    # the decreasing reference point direction. The records overlapping the
+    # range are processed whole and the outputs limited to it afterwards
+    # (limit_to_range), so the smoothing sees the road beyond each limit.
+    limited = args.start is not None or args.end is not None
+    clip_s = float(args.start) if args.start is not None else float(sub["Start_MP"].min())
+    clip_e = float(args.end) if args.end is not None else float(sub["End_MP"].max())
+    decreasing = args.start is not None and args.end is not None and clip_e < clip_s
+    rp_lo, rp_hi = min(clip_s, clip_e), max(clip_s, clip_e)
+    if limited and rp_hi - rp_lo < 0.01:
+        raise ValueError(f"The Begin RP ({clip_s:g}) and End RP ({clip_e:g}) must be at least "
+                         f"0.01 mi apart.")
+    if limited:
         n_route = len(sub)
-        sub = sub[(sub["Start_MP"] <= clip_e) & (sub["End_MP"] >= clip_s)].copy()
+        sub = sub[(sub["Start_MP"] <= rp_hi) & (sub["End_MP"] >= rp_lo)].copy()
         if sub.empty:
-            raise ValueError("No geometry overlaps the requested start/end RP range.")
-        # Records overlapping the range are processed whole, so the run can
-        # reach a little beyond it; say so, since a typo here silently
-        # shortens the route.
+            raise ValueError(f"No records of route {route_norm} overlap RP {rp_lo:g} to {rp_hi:g} "
+                             f"(the route runs RP {df[df['RouteId'] == route_norm]['Start_MP'].min():.3f} "
+                             f"to {df[df['RouteId'] == route_norm]['End_MP'].max():.3f}).")
+        # Say what was processed, since a typo here silently shortens the
+        # route.
         logging.info(
             f"Limited to RP {clip_s:g} to {clip_e:g} (Begin/End RP): {len(sub):,} of "
-            f"{n_route:,} records for the route overlap that range; processing RP "
-            f"{sub['Start_MP'].min():.3f} to {sub['End_MP'].max():.3f} (route runs RP "
+            f"{n_route:,} records for the route overlap that range and are processed whole "
+            f"(RP {sub['Start_MP'].min():.3f} to {sub['End_MP'].max():.3f}); the outputs are "
+            f"limited to the range, with curves crossing a limit kept whole when their midpoint "
+            f"is inside it (route runs RP "
             f"{df[df['RouteId'] == route_norm]['Start_MP'].min():.3f} to "
             f"{df[df['RouteId'] == route_norm]['End_MP'].max():.3f})."
         )
+    logging.info("Direction: decreasing reference point (Begin RP greater than End RP)." if decreasing
+                 else "Direction: increasing reference point.")
 
     logging.info(f"Rows for route {route_norm}: {len(sub):,}")
 
@@ -618,6 +734,7 @@ def main():
 
     if not all_chunks:
         raise ValueError("No valid stitched geometry found.")
+    all_chunks = orient_chunks(all_chunks, decreasing)
 
     # The national NBI/NTI tables are cut down to the route's padded
     # bounding box (see core.rat_core.compute_padded_bbox).
@@ -633,8 +750,10 @@ def main():
     all_h, all_v, all_g, all_vtx_dfs = [], [], [], []
 
     for idx, info in enumerate(all_chunks):
-        chunk_s_mp = info["chunk_low_mp"]
-        chunk_e_mp = info["chunk_high_mp"]
+        # Reference points at the chunk's first and last points in the
+        # direction of the run.
+        chunk_s_mp = info["rp_first"]
+        chunk_e_mp = info["rp_last"]
 
         # Normally already cached by the call above.
         ensure_dem_cells_cached([info["geom"]], shared_cache_dir)
@@ -656,7 +775,7 @@ def main():
         spacing_m = res["spacing_m"]
         h = analyze_horizontal_curvature(res["coords_m_smooth"], spacing_m, params)
         if params.get("ENABLE_MERGE", False):
-            h = merge_horizontal_curves(h, params)
+            h = merge_horizontal_curves(h, params, res["coords_m_smooth"], spacing_m)
         v = analyze_vertical_parabolic(res["z_smooth"], spacing_m, params)
         g = build_grade_segments(res["z_smooth"], spacing_m, v)
         seg_grade, seg_bin = label_vertices_by_segments(len(res["z_smooth"]), spacing_m, g)
@@ -666,12 +785,14 @@ def main():
             c["RouteId"] = route_norm
             c["Calibrated_Start_MP"] = chunk_s_mp + (c["Start_Dist"] / total_len) * (chunk_e_mp - chunk_s_mp)
             c["Calibrated_End_MP"] = chunk_s_mp + (c["End_Dist"] / total_len) * (chunk_e_mp - chunk_s_mp)
-            for key in ("Start_Dist", "End_Dist", "SC_Dist", "CS_Dist"):
+            if "PI_Dist" in c:
+                c["PI_MP"] = chunk_s_mp + (c["PI_Dist"] / total_len) * (chunk_e_mp - chunk_s_mp)
+            for key in ("Start_Dist", "End_Dist", "SC_Dist", "CS_Dist", "PI_Dist"):
                 if key in c:
                     c[key] += info["global_start_dist_m"]
         for c in v + g:
             c["RouteId"] = route_norm
-            c["Part"] = chunk_s_mp
+            c["Part"] = info["chunk_low_mp"]
             c["FSystem"] = info["f_sys"]
             c["Calibrated_Start_MP"] = chunk_s_mp + (c["Start_Dist"] / total_len) * (chunk_e_mp - chunk_s_mp)
             c["Calibrated_End_MP"] = chunk_s_mp + (c["End_Dist"] / total_len) * (chunk_e_mp - chunk_s_mp)
@@ -692,11 +813,24 @@ def main():
         raise RuntimeError("Smoothing failed for all route chunks (insufficient geometry points).")
 
     final_vtx_df = pd.concat(all_vtx_dfs, ignore_index=True)
+    if limited:
+        n_h, n_v = len(all_h), len(all_v)
+        final_vtx_df, all_h, all_v, all_g = limit_to_range(final_vtx_df, all_h, all_v, all_g, rp_lo, rp_hi)
+        logging.info(
+            f"Outputs limited to RP {clip_s:g} to {clip_e:g}: {len(all_h)} of {n_h} horizontal and "
+            f"{len(all_v)} of {n_v} vertical curves; the sheets and tables run from RP "
+            f"{final_vtx_df['Milepost'].iloc[0]:.3f} to {final_vtx_df['Milepost'].iloc[-1]:.3f}."
+        )
     final_h_df = pd.DataFrame(all_h)
     final_v_df = pd.DataFrame(all_v)
     safe_route = safe_route_name(route_norm)
-    global_mp_start = final_vtx_df["Milepost"].min()
-    global_mp_end = final_vtx_df["Milepost"].max()
+    # File names and the run-parameters file use the Begin/End RP entered
+    # (in the order entered), else the first and last points processed.
+    if limited:
+        global_mp_start, global_mp_end = clip_s, clip_e
+    else:
+        global_mp_start = float(final_vtx_df["Milepost"].iloc[0])
+        global_mp_end = float(final_vtx_df["Milepost"].iloc[-1])
 
     base = f"plan_profile_{safe_route}_MP_{global_mp_start:.3f}_to_{global_mp_end:.3f}"
 
@@ -716,6 +850,7 @@ def main():
             include_fsystem=False, speed_mph=speed_mph, sight_warning_ft=sight_warning_ft,
         )
         param_summary["identity"]["dem_tile_dir"] = shared_cache_dir
+        param_summary["identity"]["direction"] = "decreasing" if decreasing else "increasing"
         save_run_param_summary_json(param_summary, params_json_path)
         logging.info(f"Saved run-parameters summary: {params_json_path}")
     except Exception as e:
@@ -727,6 +862,8 @@ def main():
         from shapely.ops import substring
         import random
 
+        # 1-mile test pieces, from the Begin/End RP range when one was
+        # entered (a piece is used when its midpoint is inside it).
         test_segments = []
         for chunk in all_chunks:
             l_m = chunk["length_m"]
@@ -737,6 +874,9 @@ def main():
             for i in range(num_miles):
                 start_frac = (i * 1609.34) / l_m
                 end_frac = ((i + 1) * 1609.34) / l_m
+                mid_rp = chunk["rp_first"] + (start_frac + end_frac) / 2.0 * (chunk["rp_last"] - chunk["rp_first"])
+                if limited and not (rp_lo <= mid_rp <= rp_hi):
+                    continue
                 sub_geom = substring(chunk["geom"], start_frac, end_frac, normalized=True)
                 test_segments.append({"geom": sub_geom, "f_sys": chunk["f_sys"]})
 
@@ -748,7 +888,8 @@ def main():
             generate_calibration_dashboard(sampled_chunks, shared_cache_dir, params, calibration_html, route_norm)
             logging.info(f"Saved calibration dashboard: {calibration_html}")
         else:
-            logging.warning("Route too short to extract 1-mile test segments for calibration.")
+            logging.warning("Route (or Begin/End RP range) too short to extract 1-mile test segments "
+                            "for calibration.")
 
     except Exception as e:
         logging.warning(f"Failed to generate calibration dashboard: {e}")
