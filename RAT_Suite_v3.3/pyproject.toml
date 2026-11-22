@@ -26,6 +26,7 @@ dependencies = [
     "plotly",
     "contextily",
     "requests",
+    "laspy[lazrs]",
     "Pillow",
 ]
 

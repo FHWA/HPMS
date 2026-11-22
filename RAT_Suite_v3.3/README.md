@@ -6,6 +6,7 @@ The Roadway Alignment Tool (RAT) Suite is a collection of Python geospatial appl
 Highlights of version 3.3:
 * **1-meter elevation.** Profiles are sampled from USGS 3DEP 1 m DEM tiles, downloaded on demand and cached for reuse.
 * **Bridge and tunnel repair.** Bare-earth DEMs remove bridge decks and show the ground over tunnels. RAT finds these spans directly in the elevation data and replaces each with a straight line between its observed ends. HPMS and National Bridge/Tunnel Inventory (NBI/NTI) records label the spans, but the DEM decides where they are. The exception is a long bridge whose approaches run over a sloping shore, which leaves no clear edge in the DEM: where an HPMS bridge record covers ground well below the road, the span follows the record's limits (up to 30,000 ft, `BRIDGE_RECORD_MAX_LEN_FT` in `core/rat_core.py`).
+* **Bridge decks from lidar.** On bridges 300 ft or longer (`LIDAR_MIN_SPAN_FT`), RAT reads the USGS 3DEP lidar points around the span and replaces the straight line with the measured deck (`core/rat_lidar.py`; the GUI's **Bridge decks from lidar** box, on by default). The points come from the copy of 3DEP in Amazon's public cloud, read for the bridge only, or from whole USGS tiles when a project is not in that copy. Where the lidar has no deck points (often over open water), the deck is a straight line between the last measured points, raised where needed so it is no lower than the water plus the NBI navigation clearance. Vertical curves where measured deck meets such a stretch are left out of the curve tables, and the vertices table's `Elev_Source` column says where each elevation came from. Needs the `laspy` package with LAZ support (`pip install "laspy[lazrs]"`); without it, or without network access to the lidar sources, bridges keep the straight line and the Run Log says why.
 * **National smoothing factors.** Horizontal smoothing factors by State and functional class come from a national calibration (see *National Calibration Defaults* below) and load automatically for the selected State. One vertical smoothing factor applies nationwide.
 * **Decoupled design.** The Unified GUI runs each processing script as a separate process, which keeps memory in check during statewide and national runs.
 
@@ -23,6 +24,7 @@ RAT_Suite_v3.3/
 │   ├── rat_core.py                     Math and geospatial engine
 │   ├── rat_cross_section.py            Cross sections and superelevation from the 1 m DEM
 │   ├── rat_param_summary.py            Run-parameter panels for maps, dashboards, PDFs
+│   ├── rat_lidar.py                    3DEP lidar download and bridge deck elevations
 │   ├── rat_structure_report.py         Bridge/tunnel span report
 │   ├── rat_dem_relief.py               Shaded relief from cached 1 m DEM tiles
 │   └── national_smoothing_factors.json National calibration results
@@ -70,7 +72,7 @@ The suite is packaged with `pyproject.toml` and requires **Python 3.10 or later*
    ```
 2. **Create an environment (recommended).** With conda, which installs the geospatial libraries most reliably on Windows:
    ```bash
-   conda create -n rat_suite_env -c conda-forge python=3.12 geopandas rasterio fiona pyproj scipy matplotlib plotly folium contextily requests
+   conda create -n rat_suite_env -c conda-forge python=3.12 geopandas rasterio fiona pyproj scipy matplotlib plotly folium contextily requests laspy lazrs-python
    conda activate rat_suite_env
    ```
    Or with `venv` and pip:
@@ -97,7 +99,7 @@ The suite is packaged with `pyproject.toml` and requires **Python 3.10 or later*
 
 ### 3. Directories
 * **Output Directory:** where results are written.
-* **DEM Directory:** where elevation tiles are cached. Keep this folder between runs; re-downloading tiles is the slowest part of a large run. A tile where USGS has no elevation data (open water, or outside 3DEP coverage) is marked with a `.missing` file in `align_1m_cache` and not requested again; delete those files to have the tiles requested again (for example, after USGS adds new lidar). A tile that can't be downloaded because the network or the USGS service is down is logged as an error and tried again on the next run.
+* **DEM Directory:** where elevation tiles are cached. Keep this folder between runs; re-downloading tiles is the slowest part of a large run. A tile where USGS has no elevation data (open water, or outside 3DEP coverage) is marked with a `.missing` file in `align_1m_cache` and not requested again; delete those files to have the tiles requested again (for example, after USGS adds new lidar). A tile that can't be downloaded because the network or the USGS service is down is logged as an error and tried again on the next run. Lidar points read for bridge decks (see below) are kept in a `lidar` folder inside the DEM Directory.
 
 ### 4. Modes
 * **Run Alignment:** statewide curve tables, map, and dashboard.
@@ -140,7 +142,7 @@ The calibration's audit CSV and run log record the per-repeat results behind eac
 ## Known limitations
 * **HPMS line off the roadway.** Where the HPMS line follows an old alignment, curves and grades there describe the ground beside the road. Plan/profile runs flag these stretches (`Line_Off_Road`); alignment runs do not.
 * **Bridges at the end of the data.** A bridge that runs off the end of the route's data (at a State line, for example) is held level at the one abutment in the data.
-* **Bridge ends on steep approaches.** Each bridge deck is drawn as a straight line between its abutments. Where a steep approach meets a much flatter deck, the smoothing can dip a foot or two below the ground just before the bridge, giving a grade one class steeper than the road and a sharp sag or crest at the bridge end. Check class D–F vertical curves and steep grades at bridge ends (especially sags flagged `False_Valley_Warning`) against the raw elevation line on the profile sheets.
+* **Bridge ends on steep approaches.** Each bridge deck without lidar is drawn as a straight line between its abutments. Where a steep approach meets a much flatter deck, the smoothing can dip a foot or two below the ground just before the bridge, giving a grade one class steeper than the road and a sharp sag or crest at the bridge end. Check class D–F vertical curves and steep grades at bridge ends (especially sags flagged `False_Valley_Warning`) against the raw elevation line on the profile sheets.
 
 See `Roadmap.md` for planned work.
 
