@@ -34,7 +34,7 @@ Both rat_alignment_cli.py and rat_plan_profile_cli.py use these, so every
 output shows the run parameters in the same format.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, November 6, 2026
+VERSION: 3.3, November 22, 2026
 """
 import datetime
 import html as _html_mod
@@ -54,6 +54,7 @@ CORE_PARAM_SPECS = [
     ("H_MIN_CURVE_LENGTH_FT",   "H Min Curve Length (ft)"),
     ("V_MIN_CURVE_LENGTH_FT",   "V Min Curve Length (ft)"),
     ("V_MIN_GRADE_CHANGE",      "V Min Grade Change (%)"),
+    ("USE_LIDAR_BRIDGE_DECKS",  "Bridge Decks from Lidar"),
     ("TRIM_CURVE_ENDPOINTS",    "Trim Curve Endpoints"),
     ("ENABLE_MERGE",            "Curve Merge Enabled"),
     ("MERGE_GAP_FLOOR_FT",      "Merge Gap Floor (ft)"),

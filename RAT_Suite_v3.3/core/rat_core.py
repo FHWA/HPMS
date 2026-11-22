@@ -25,7 +25,7 @@ calculus-based curvature analysis (kappa), and KDTree spatial indexing for
 4D geometry generation.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, November 20, 2026
+VERSION: 3.3, November 22, 2026
 """
 from typing import Dict, List, Tuple, Optional
 import math
@@ -50,6 +50,9 @@ from scipy.signal import butter, filtfilt
 from scipy.stats import linregress
 from pyproj import Transformer
 from scipy.spatial import cKDTree
+
+from core.rat_lidar import (lidar_bridge_decks, describe_deck_note,
+                            ELEV_SOURCE_SPAN, ELEV_SOURCES_UNMEASURED)
 
 # -------------------------
 # Constants
@@ -151,6 +154,11 @@ DEFAULTS = {
     'BRIDGE_RECORD_MAX_LEN_FT':    30000.0,
     'TUNNEL_MAX_LEN_FT':           10000.0,
     'STRUCTURE_MATCH_TOL_FT':      300.0,   # HPMS/NBI record within this distance labels a span
+    # Bridge decks from 3DEP lidar (core/rat_lidar.py) in place of the
+    # straight line between abutments, for bridge spans at least
+    # LIDAR_MIN_SPAN_FT long. Shorter decks are close to the straight line.
+    'USE_LIDAR_BRIDGE_DECKS':      True,
+    'LIDAR_MIN_SPAN_FT':           300.0,
 
     # --- Merge controls ---
     'ENABLE_MERGE':                False,
@@ -215,8 +223,9 @@ def build_structure_mask(
     find_structure_spans() to test spans against:
       {"source": 1, "kind": 1 or 2, "start": i, "end": j} for an HPMS
           record covering points i to j;
-      {"source": 2, "kind": 1 or 2, "at": k, "length_m": L} for an NBI
-          bridge or NTI tunnel point nearest point k (L NaN if unknown).
+      {"source": 2, "kind": 1 or 2, "at": k, "length_m": L, "nav_clear_m": C}
+          for an NBI bridge or NTI tunnel point nearest point k (L NaN if
+          unknown; C the NBI navigation vertical clearance in m, NaN if none).
     """
     n_pts = len(mileposts)
     tier_mask = np.zeros(n_pts, dtype=int)
@@ -254,10 +263,12 @@ def build_structure_mask(
                  else np.ones(len(nbi_nti_gdf), dtype=int))
         lengths = (nbi_nti_gdf["length_m"].to_numpy(dtype=float) if "length_m" in nbi_nti_gdf.columns
                    else np.full(len(nbi_nti_gdf), np.nan))
+        navs = (nbi_nti_gdf["nav_clear_m"].to_numpy(dtype=float) if "nav_clear_m" in nbi_nti_gdf.columns
+                else np.full(len(nbi_nti_gdf), np.nan))
 
         # Drop points that projected to Infinity or NaN
         valid = np.isfinite(struct_xy).all(axis=1)
-        struct_xy, kinds, lengths = struct_xy[valid], kinds[valid], lengths[valid]
+        struct_xy, kinds, lengths, navs = struct_xy[valid], kinds[valid], lengths[valid], navs[valid]
 
         if len(struct_xy) > 0:
             struct_tree = cKDTree(struct_xy)
@@ -287,7 +298,7 @@ def build_structure_mask(
             if records_out is not None:
                 for h, (_, i) in nearest.items():
                     records_out.append({"source": 2, "kind": int(kinds[h]), "at": int(i),
-                                        "length_m": float(lengths[h])})
+                                        "length_m": float(lengths[h]), "nav_clear_m": float(navs[h])})
 
     return tier_mask
 
@@ -2266,7 +2277,9 @@ def fetch_nbi_nti_state(state_fips: str, bbox: tuple = None) -> gpd.GeoDataFrame
     folder (any .txt, .csv or .xml), as points in EPSG:4326, with the kind
     of structure ("kind": 1 bridge, 2 tunnel) and its length in meters
     ("length_m": NBI Item 49, or NTI item G1 converted from feet; NaN if
-    not given). Only NBI main records (Item 5A = 1) are kept; the other
+    not given), and for bridges over a navigable channel the navigation
+    vertical clearance ("nav_clear_m": Item 39 where Item 38 is 1; NaN
+    otherwise). Only NBI main records (Item 5A = 1) are kept; the other
     records of a structure repeat its location and carry no length.
 
     bbox, if given, is (minx, miny, maxx, maxy) in EPSG:4326, typically the
@@ -2332,12 +2345,20 @@ def fetch_nbi_nti_state(state_fips: str, bbox: tuple = None) -> gpd.GeoDataFrame
                             lon_s = str(raw_lon).replace('.', '').zfill(9)
                             lon = -(float(lon_s[:3]) + float(lon_s[3:5])/60.0 + float(lon_s[5:7] + "." + lon_s[7:])/3600.0)
 
+                        nav_m = np.nan
                         if is_nbi:
                             kind, length_m = 1, pd.to_numeric(row.get("STRUCTURE_LEN_MT_049"), errors="coerce")
+                            # Item 39, navigation vertical clearance (m), where
+                            # Item 38 says navigation control applies.
+                            if str(row.get("NAVIGATION_038", "")).strip() == "1":
+                                nav = pd.to_numeric(row.get("NAV_VERT_CLR_MT_039"), errors="coerce")
+                                if pd.notna(nav) and 0 < nav <= 100:
+                                    nav_m = float(nav)
                         else:
                             kind, length_m = 2, pd.to_numeric(row.get("G1"), errors="coerce") / FEET_PER_METER
                         points.append({"geometry": Point(float(lon), float(lat)), "kind": kind,
-                                       "length_m": float(length_m) if pd.notna(length_m) and length_m > 0 else np.nan})
+                                       "length_m": float(length_m) if pd.notna(length_m) and length_m > 0 else np.nan,
+                                       "nav_clear_m": nav_m})
                     except (ValueError, TypeError) as e:
                         logging.debug(f"Skipping structure with invalid coordinates: {e}")
                         continue
@@ -2364,7 +2385,7 @@ def fetch_nbi_nti_state(state_fips: str, bbox: tuple = None) -> gpd.GeoDataFrame
     logging.warning(f"No NBI/NTI structures loaded. Put the NBI and NTI files in {nbi_folder} "
                     f"(see download_nbi.bat there). Without them, spans are kept only where an HPMS "
                     f"structure record supports them, or for short bridges with steep sides.")
-    return gpd.GeoDataFrame({"kind": [], "length_m": []}, geometry=[], crs="EPSG:4326")
+    return gpd.GeoDataFrame({"kind": [], "length_m": [], "nav_clear_m": []}, geometry=[], crs="EPSG:4326")
 
 # -------------------------
 # Download 1 meter USGS DEMs
@@ -5004,6 +5025,40 @@ def profile_result_ok(res) -> bool:
     return res is not None and bool(res.get("ok", True))
 
 
+# Vertical curves this close to bridge deck with no lidar points are left
+# out of the curve tables (vertical_curves_on_measured).
+_UNMEASURED_CURVE_BUFFER_FT = 200.0
+
+
+def vertical_curves_on_measured(curves: List[Dict], res: dict, spacing_m: float) -> List[Dict]:
+    """
+    The vertical curves of a profile that do not touch a stretch of bridge
+    deck with no lidar points (a gap line or clearance floor, see
+    core/rat_lidar.py). Where the measured deck meets such a stretch the
+    profile bends because the deck was not measured there, so a curve there
+    describes the method, not the road. The smoothed profile rounds that
+    bend over some distance, so curves within _UNMEASURED_CURVE_BUFFER_FT of
+    such a stretch are left out too. Curve Start_Dist / End_Dist are in meters
+    from the start of the profile. The grade segments are still built from
+    every curve, so the grades on each side stay apart.
+    """
+    src = res.get("elev_source") if isinstance(res, dict) else None
+    if src is None or not curves:
+        return curves
+    unmeasured = np.isin(np.asarray(src), ELEV_SOURCES_UNMEASURED)
+    if not unmeasured.any():
+        return curves
+    n = len(unmeasured)
+    buf = int(np.ceil(_UNMEASURED_CURVE_BUFFER_FT / FEET_PER_METER / spacing_m))
+    kept = []
+    for c in curves:
+        s = max(0, int(np.floor(c["Start_Dist"] / spacing_m)) - buf)
+        e = min(n - 1, int(np.ceil(c["End_Dist"] / spacing_m)) + buf)
+        if not unmeasured[s:e + 1].any():
+            kept.append(c)
+    return kept
+
+
 def smooth_plan_profile_from_linestring(
         line: LineString,
         dem_dir: str,
@@ -5155,11 +5210,36 @@ def smooth_plan_profile_from_linestring(
         z_filled, spacing_m, params, structure_mask, structure_records
     )
 
+    # Bridge decks measured from lidar replace the straight span lines where
+    # the lidar has them (core/rat_lidar.py). elev_source records, point by
+    # point, where each elevation came from.
+    elev_source = np.where(structure_kind_out > 0, 1, 0).astype(int)
+    lidar_notes = []
+    if params.get("USE_LIDAR_BRIDGE_DECKS", True) and (structure_kind_out == 1).any():
+        try:
+            z_fixed, elev_source, lidar_notes = lidar_bridge_decks(
+                z_fixed, z_filled, structure_kind_out, coords_m, spacing_m, utm,
+                os.path.join(dem_dir, "lidar"), params, structure_records,
+                label=f"route {route_id}" if route_id is not None else "this route")
+        except Exception as e:
+            logging.warning(f"Bridge decks from lidar skipped on route {route_id!r}: {type(e).__name__}: {e}")
+        if lidar_notes and route_id is not None:
+            total = max(d_axis[-1], 1e-9)
+            for note in lidar_notes:
+                rp = [chunk_s_mp + (d_axis[note[k]] / total) * (chunk_e_mp - chunk_s_mp) for k in ("start", "end")]
+                note["label"] = f"route {route_id} RP {min(rp):.3f}-{max(rp):.3f}"
+        for note in lidar_notes:
+            logging.info(describe_deck_note(note))
+
     # Structure spans are weighted heavily so the spline follows each span
     # line, then held exactly to it. The weight tapers in from each end so
     # the vertical curve that usually straddles a bridge end or tunnel
-    # portal can form there instead of being forced into a kink.
-    spanned = structure_kind_out > 0
+    # portal can form there instead of being forced into a kink. Where the
+    # deck comes from lidar (measured, or a gap line between measured
+    # points) the profile keeps the ordinary weight: the measured deck is
+    # road surface like the rest of the profile, and a gap line held at full
+    # weight beside it would leave a kink with false curves either side.
+    spanned = (structure_kind_out > 0) & (elev_source == ELEV_SOURCE_SPAN)
     depth_ft = distance_transform_edt(spanned) * spacing_m * FEET_PER_METER
     v_weights = np.where(spanned, 1.0 + (_SPAN_SPLINE_WEIGHT - 1.0) * np.clip(depth_ft / _SPAN_WEIGHT_TAPER_FT, 0, 1), 1.0)
     sz = UnivariateSpline(d_axis, z_fixed, w=v_weights, s=spline_s(s_factor_v, len(d_axis)))
@@ -5190,6 +5270,10 @@ def smooth_plan_profile_from_linestring(
         # HPMS/NBI record matches at each point, whether or not a span was
         # detected there (e.g. a bridge over this route).
         "structure_record": structure_mask if structure_mask is not None else np.zeros(len(d_axis), dtype=int),
+        # Where each elevation came from (ELEV_SOURCE_LABELS) and a note for
+        # each bridge where lidar was tried.
+        "elev_source": elev_source,
+        "lidar_notes": lidar_notes,
         "iri_proxy_in": iri_proxy,
         "available_sight_dist_ft": asd_array
     }
