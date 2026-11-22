@@ -24,7 +24,7 @@ it collects inputs, packages them into a JSON payload, and uses the subprocess
 module to safely execute the suite's CLI scripts in isolated memory environments.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, November 20, 2026
+VERSION: 3.3, November 22, 2026
 """
 
 import os
@@ -58,6 +58,7 @@ from core.rat_core import (
     socrata_area_clauses, load_local_hpms, apply_facility_fsystem_filters,
     HPMS_FIELD_CATALOG,
 )
+from core.rat_lidar import lidar_package_problem
 
 SOCRATA_DEFAULT = "https://datahub.transportation.gov/resource/42um-tgh5.json"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s: %(message)s")
@@ -390,6 +391,7 @@ class RATUnifiedGUI:
             "v_min_grade_change": tk.StringVar(value="0.5"),
 
             "enable_merge": tk.BooleanVar(value=False),
+            "use_lidar_bridge_decks": tk.BooleanVar(value=True),
             "merge_gap_floor_ft": tk.StringVar(value="50"),
             "merge_gap_pct": tk.StringVar(value="0.25"),
             "trim_curve_endpoints": tk.BooleanVar(value=True),
@@ -714,6 +716,8 @@ class RATUnifiedGUI:
         ttk.Entry(grp_v, textvariable=self.vars["v_min_curve_length_ft"], width=12).grid(row=1, column=1, sticky="w")
         ttk.Label(grp_v, text="V Min Grade Change (%):").grid(row=2, column=0, sticky="e", pady=2)
         ttk.Entry(grp_v, textvariable=self.vars["v_min_grade_change"], width=12).grid(row=2, column=1, sticky="w")
+        ttk.Checkbutton(grp_v, text="Bridge decks from lidar (3DEP)",
+                        variable=self.vars["use_lidar_bridge_decks"]).grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
         grp_runtime = ttk.LabelFrame(left, text="Merge & Runtime", padding=10)
         grp_runtime.grid(row=0, column=2, sticky="nsew", padx=(6, 0))
@@ -996,11 +1000,16 @@ class RATUnifiedGUI:
         if not differs:
             logging.info("Processing settings: all at their defaults "
                          "(smoothing factors are listed by each tool).")
-            return
-        logging.info("Processing settings that differ from the defaults "
-                     "(smoothing factors are listed by each tool):")
-        for k, value, default, _ in differs:
-            logging.info(f"    {k}: {value} (default {default})")
+        else:
+            logging.info("Processing settings that differ from the defaults "
+                         "(smoothing factors are listed by each tool):")
+            for k, value, default, _ in differs:
+                logging.info(f"    {k}: {value} (default {default})")
+        if self.vars["use_lidar_bridge_decks"].get():
+            problem = lidar_package_problem()
+            if problem:
+                logging.warning(f"Bridge decks from lidar are on, but {problem}. Bridges keep the "
+                                f"straight line between their abutments.")
 
     def _check_loaded_settings(self, source: str):
         """
@@ -1445,6 +1454,7 @@ class RATUnifiedGUI:
             "V_MIN_GRADE_CHANGE": safe_float(self.vars["v_min_grade_change"].get()),
 
             "ENABLE_MERGE": bool(self.vars["enable_merge"].get()),
+            "USE_LIDAR_BRIDGE_DECKS": bool(self.vars["use_lidar_bridge_decks"].get()),
             "MERGE_GAP_FLOOR_FT": safe_float(self.vars["merge_gap_floor_ft"].get()),
             "MERGE_GAP_PCT": safe_float(self.vars["merge_gap_pct"].get()),
             "TRIM_CURVE_ENDPOINTS": bool(self.vars["trim_curve_endpoints"].get()),
@@ -1557,6 +1567,7 @@ class RATUnifiedGUI:
             "v_min_curve_length_ft": "200",
             "v_min_grade_change":    "0.5",
             "enable_merge":          False,
+            "use_lidar_bridge_decks": True,
             "merge_gap_floor_ft":    "50",
             "merge_gap_pct":         "0.25",
             "trim_curve_endpoints":  True,

@@ -45,7 +45,7 @@ travel (curve direction, cross-section sides, grade signs and sight
 distance), and the tables list reference points in decreasing order.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, November 20, 2026
+VERSION: 3.3, November 22, 2026
 """
 import os
 import sys
@@ -74,6 +74,7 @@ from core.rat_core import (
     profile_result_ok,
     analyze_horizontal_curvature,
     analyze_vertical_parabolic,
+    vertical_curves_on_measured,
     build_grade_segments,
     label_vertices_by_segments,
     add_speed_reference,
@@ -102,6 +103,7 @@ from core.rat_structure_report import (
     build_structure_span_table,
     render_structure_span_pdf,
 )
+from core.rat_lidar import ELEV_SOURCE_LABELS
 from core.rat_param_summary import (
     build_run_param_summary,
     render_param_panel_html,
@@ -150,6 +152,7 @@ def build_vertices_df(res: dict, route_id: str, chunk_s_mp: float, chunk_e_mp: f
     structure_rec   = res.get("structure_record", np.zeros(len(z), dtype=int))
     iri_proxy       = res.get("iri_proxy_in", np.zeros(len(z), dtype=float))
     asd             = res.get("available_sight_dist_ft", np.zeros(len(z), dtype=float))
+    elev_source     = res.get("elev_source", np.zeros(len(z), dtype=int))
     headings_unwrapped = calculate_headings(coords_m)
     grads = np.array([get_tangent_grade(z, i, spacing, params["REGRESSION_WINDOW_M"]) for i in range(len(z))])
     total_len = max(float(res["d_axis"][-1]), 1.0)
@@ -170,6 +173,7 @@ def build_vertices_df(res: dict, route_id: str, chunk_s_mp: float, chunk_e_mp: f
             "Raw_Lon": coords_wgs_raw[i][0],
             "Raw_Lat": coords_wgs_raw[i][1],
             "Elev_Raw_Ft": round(float(z_raw[i]) * FEET_PER_METER, 3),
+            "Elev_Source": ELEV_SOURCE_LABELS.get(int(elev_source[i]), "DEM"),
             "Grade_Pct": round(float(grads[i]), 3),
             "Heading_Deg_Unwrapped": round(float(headings_unwrapped[i]), 5),
             "Structure_Tier":           STRUCTURE_TIER_LABELS.get(int(structure_tier[i]), "None"),
@@ -778,6 +782,10 @@ def main():
             h = merge_horizontal_curves(h, params, res["coords_m_smooth"], spacing_m)
         v = analyze_vertical_parabolic(res["z_smooth"], spacing_m, params)
         g = build_grade_segments(res["z_smooth"], spacing_m, v)
+        # Curves where measured bridge deck meets a stretch with no lidar
+        # points are left out (see vertical_curves_on_measured); the grades
+        # keep them.
+        v = vertical_curves_on_measured(v, res, spacing_m)
         seg_grade, seg_bin = label_vertices_by_segments(len(res["z_smooth"]), spacing_m, g)
         total_len = max(float(res["d_axis"][-1]), 1.0)
 

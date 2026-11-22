@@ -30,7 +30,7 @@ the same output. Elevations come from the USGS 3DEP 1 m DEM, cached in
 align_1m_cache under the DEM directory.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, November 20, 2026
+VERSION: 3.3, November 22, 2026
 """
 import os
 import glob
@@ -75,6 +75,7 @@ from core.rat_core import (
     profile_result_ok,
     analyze_horizontal_curvature,
     analyze_vertical_parabolic,
+    vertical_curves_on_measured,
     build_grade_segments,
     label_vertices_by_segments,
     add_speed_reference,
@@ -103,6 +104,7 @@ from core.rat_core import (
     STRUCTURE_KIND_LABELS,
     STRUCTURE_RECORD_LABELS,
 )
+from core.rat_lidar import ELEV_SOURCE_LABELS
 from core.rat_param_summary import build_run_param_summary, render_param_panel_html
 from core.rat_structure_report import build_structure_span_table
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s: %(message)s")
@@ -139,8 +141,10 @@ def build_vertices_df(
     structure_rec   = res.get("structure_record", np.zeros(n_pts, dtype=int))
     iri_proxy       = res.get("iri_proxy_in", np.zeros(n_pts, dtype=float))
     asd             = res.get("available_sight_dist_ft", np.zeros(n_pts, dtype=float))
+    elev_source     = res.get("elev_source", np.zeros(n_pts, dtype=int))
 
     tier_labels = np.array([STRUCTURE_TIER_LABELS[i] for i in range(4)])
+    source_labels = np.array([ELEV_SOURCE_LABELS[i] for i in range(len(ELEV_SOURCE_LABELS))])
     kind_labels = np.array([STRUCTURE_KIND_LABELS[i] for i in range(3)])
     rec_labels  = np.array([STRUCTURE_RECORD_LABELS[i] for i in range(3)])
 
@@ -168,6 +172,7 @@ def build_vertices_df(
         "Raw_Lon":                  coords_wgs_raw[:, 0],
         "Raw_Lat":                  coords_wgs_raw[:, 1],
         "Elev_Raw_Ft":              np.round(z_raw * FEET_PER_METER, 3),
+        "Elev_Source":              source_labels[np.clip(elev_source, 0, len(source_labels) - 1)],
         "Grade_Pct":                np.round(grads, 3),
         "Heading_Deg_Unwrapped":    np.round(headings_unwrapped, 5),
         "Structure_Tier":           tier_labels[np.clip(structure_tier, 0, 3)],
@@ -317,6 +322,9 @@ def process_chunk(route_id: str, item: dict, dem_dir: str, params: dict,
         h_curves = merge_horizontal_curves(h_curves, params, res["coords_m_smooth"], spacing_m)
     v_curves = analyze_vertical_parabolic(z_smooth, spacing_m, params)
     segments = build_grade_segments(z_smooth, spacing_m, v_curves)
+    # Curves where measured bridge deck meets a stretch with no lidar points
+    # are left out (see vertical_curves_on_measured); the grades keep them.
+    v_curves = vertical_curves_on_measured(v_curves, res, spacing_m)
 
     pad_ft = float(params.get("CHUNK_SPLIT_PADDING_FT", 20000.0))
 
