@@ -25,7 +25,7 @@ calculus-based curvature analysis (kappa), and KDTree spatial indexing for
 4D geometry generation.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, November 22, 2026
+VERSION: 3.3, November 23, 2026
 """
 from typing import Dict, List, Tuple, Optional
 import math
@@ -310,6 +310,7 @@ STRUCTURE_TIER_LABELS = {0: "None", 1: "1_HPMS", 2: "2_NBI", 3: "3_DIP"}
 STRUCTURE_RECORD_LABELS = {0: "None", 1: "HPMS", 2: "NBI"}
 
 _EDGE_MERGE_FT = 25.0       # steep pieces closer than this form one edge (stair-stepped embankments)
+_EDGE_CORE_GRADE = 0.30     # a structure face is steeper than this; see _find_dem_edges
 _ROAD_LEVEL_FIT_FT = 50.0   # short road-side fit used to read abutment/portal elevations
 _SPAN_INSIDE_FRAC = 0.9     # share of interior points that must sit on the gap/hump side of the span line
 _SPAN_SPLINE_WEIGHT = 100.0 # vertical spline weight on span points (see smooth_plan_profile_from_linestring)
@@ -321,6 +322,8 @@ _SPAN_MAX_GRADE = 0.15      # no bridge deck or tunnel is steeper than this
 _SPAN_GRADE_IMPROVE = 0.02  # an extended span must match the road grade better by this much (2%)
 _SPAN_BENCH_FT = 200.0      # a bridge end with another edge stepping the same way this close beyond it is on a bench
 _BENCH_ROAD_FT = 100.0      # ...unless this much ground at road level lies first, before an edge stepping back
+#   ...or, for a span that a record of about its own size supports, unless the
+#   ground beyond that further edge is no higher than the end (see find_structure_spans)
 _SPAN_END_FIT_FT = (50.0, 200.0)  # road line fitted this far beyond each span end, to place the end
 _SPAN_END_DEPART_FT = 0.5   # ground this far off that line (toward the gap/hump) is not road
 _SPAN_END_MAX_MOVE_FT = 100.0
@@ -347,7 +350,18 @@ _DIP_FACE_INSIDE_FT = 150.0   # ...and this far inside it (ends are moved out pa
 def _find_dem_edges(z: np.ndarray, spacing_m: float, edge_grade: float,
                     min_height_m: float) -> List[Tuple[int, int, int]]:
     """Returns (first_idx, last_idx, sign) for each run of near-vertical DEM
-    change. sign is -1 for a drop, +1 for a rise."""
+    change. sign is -1 for a drop, +1 for a rise.
+
+    A road that leaves one structure and falls or climbs steeply (over
+    STRUCTURE_EDGE_GRADE_PCT) straight into the face of the next one merges
+    with that face into one edge, which would then start on the road. Where
+    an edge begins within _EDGE_MERGE_FT of the end of an edge stepping the
+    other way (or ends that close before one), a gentle stretch (no steeper
+    than _EDGE_CORE_GRADE) more than _BENCH_ROAD_FT long at that end is
+    road, not face, and is left out of the edge. Two bridges on a sloping
+    street in Providence (US-44, RP 22.08-22.15) are found this way.
+    Structure faces with long gentle stretches elsewhere (a tunnel portal
+    cut, a river pier) are not next to an opposite edge and are unchanged."""
     n = len(z)
     g = np.gradient(z, spacing_m)
     steep_idx = np.flatnonzero(np.abs(g) > edge_grade)
@@ -366,7 +380,20 @@ def _find_dem_edges(z: np.ndarray, spacing_m: float, edge_grade: float,
         height = z[min(b + 1, n - 1)] - z[max(a - 1, 0)]
         if abs(height) >= min_height_m:
             edges.append((int(a), int(b), int(sgn)))
-    return edges
+    trim_pts = _BENCH_ROAD_FT / FEET_PER_METER / spacing_m
+    out = []
+    for i, (a, b, sgn) in enumerate(edges):
+        core = np.flatnonzero(np.abs(g[a:b + 1]) > _EDGE_CORE_GRADE)
+        if core.size:
+            c0, c1 = a + int(core[0]), a + int(core[-1])
+            if (i > 0 and edges[i - 1][2] != sgn and a - edges[i - 1][1] <= merge_pts
+                    and c0 - a > trim_pts):
+                a = c0
+            if (i + 1 < len(edges) and edges[i + 1][2] != sgn and edges[i + 1][0] - b <= merge_pts
+                    and b - c1 > trim_pts):
+                b = c1
+        out.append((a, b, sgn))
+    return out
 
 
 def _road_fit(z: np.ndarray, k: int, step: int, spacing_m: float) -> Tuple[float, float]:
@@ -480,6 +507,7 @@ def find_structure_spans(z_vals: np.ndarray, spacing_m: float, params: Dict,
     bench_m = _SPAN_BENCH_FT / FEET_PER_METER
     road_pts = _BENCH_ROAD_FT / FEET_PER_METER / spacing_m
     last_same_before, first_same_after = [], []
+    prev_same, next_same = [], []       # their indices in edges (None if none)
     for i, (e_a, e_b, sg) in enumerate(edges):
         prev = [edges[j][1] for j in range(i) if edges[j][2] == sg]
         nxt = [edges[j][0] for j in range(i + 1, len(edges)) if edges[j][2] == sg]
@@ -489,6 +517,8 @@ def find_structure_spans(z_vals: np.ndarray, spacing_m: float, params: Dict,
             nxt = []
         last_same_before.append(prev[-1] if prev else -10 * n)
         first_same_after.append(nxt[0] if nxt else 10 * n)
+        prev_same.append(max(j for j in range(i) if edges[j][2] == sg) if prev else None)
+        next_same.append(min(j for j in range(i + 1, len(edges)) if edges[j][2] == sg) if nxt else None)
 
     tol_pts = int(params.get('STRUCTURE_MATCH_TOL_M', 300.0 / FEET_PER_METER) / spacing_m)
     stretches = _structure_stretches(records, structure_mask, spacing_m)
@@ -510,9 +540,31 @@ def find_structure_spans(z_vals: np.ndarray, spacing_m: float, params: Dict,
         # the start) or rises again (after the end) within _SPAN_BENCH_FT,
         # so the road has not been reached yet. Not applied to tunnels,
         # whose portal cuts often step more than once.
-        if kind == 1 and ((edges[p][0] - last_same_before[p]) * spacing_m <= bench_m
-                          or (first_same_after[q] - edges[q][1]) * spacing_m <= bench_m):
-            return None
+        stops = {}
+        if kind == 1:
+            bench_s = (edges[p][0] - last_same_before[p]) * spacing_m <= bench_m
+            bench_e = (first_same_after[q] - edges[q][1]) * spacing_m <= bench_m
+            # A bench is a step partway up to the road, so the ground beyond
+            # the further step is higher than the bench. Where it is no
+            # higher than this end (by DIP_THRESHOLD_FT), the end is at road
+            # level and the further step belongs to the next structure: two
+            # bridges with a short stretch of road or a pier between them
+            # (US-44, Providence, RP 22.47-22.50). Applied only to a span
+            # that a record of about its own size supports (within
+            # _RECORD_RUN_GAP_FT, not STRUCTURE_MATCH_TOL_FT), so a DEM-only
+            # dip on a hillside, or a pairing reaching well past its bridge,
+            # still counts as a bench. Such an end is placed with its road
+            # line kept short of the next edge, which would otherwise be fitted over the
+            # next gap.
+            if (bench_s or bench_e) and _supported(stretches, a, b, kind, run_gap) < 3:
+                if bench_s and z[max(edges[prev_same[p]][0] - 1, 0)] - z[a] <= min_h:
+                    bench_s = False
+                    stops["stop_s"] = edges[p - 1][1]
+                if bench_e and z[min(edges[next_same[q]][1] + 1, n - 1)] - z[b] <= min_h:
+                    bench_e = False
+                    stops["stop_e"] = edges[q + 1][0]
+            if bench_s or bench_e:
+                return None
         za, ga = _road_fit(z, a, -1, spacing_m)
         zb, gb = _road_fit(z, b, +1, spacing_m)
         # Each end must sit on road: the ground just outside it can't keep
@@ -536,7 +588,7 @@ def find_structure_spans(z_vals: np.ndarray, spacing_m: float, params: Dict,
         if tier == 3 and (kind == 2 or b - a > 2 * tol_pts or not _has_face(z, spacing_m, a, b)):
             return None
         return {"start": a, "end": b, "z_start": za, "z_end": zb, "kind": kind, "tier": tier,
-                "edges": (p, q), "mismatch": abs(grade - (ga + gb) / 2.0)}
+                "edges": (p, q), "mismatch": abs(grade - (ga + gb) / 2.0), **stops}
 
     # Bridges are paired first, then tunnels from the edges no bridge used.
     # Otherwise the real road between two nearby bridges (rise, then drop)
@@ -609,8 +661,10 @@ def find_structure_spans(z_vals: np.ndarray, spacing_m: float, params: Dict,
     for c in spans:
         c.pop("edges", None)
         c.pop("mismatch", None)
-        c["start"], c["z_start"] = _refine_span_end(z, c["start"], -1, c["kind"], spacing_m)
-        c["end"], c["z_end"] = _refine_span_end(z, c["end"], +1, c["kind"], spacing_m)
+        c["start"], c["z_start"] = _refine_span_end(z, c["start"], -1, c["kind"], spacing_m,
+                                                    stop=c.pop("stop_s", None))
+        c["end"], c["z_end"] = _refine_span_end(z, c["end"], +1, c["kind"], spacing_m,
+                                                stop=c.pop("stop_e", None))
         c["open"] = ""
     # Two structures close together: an end moved out into the next span
     # (its road line was fitted partly over the other gap) is placed again
