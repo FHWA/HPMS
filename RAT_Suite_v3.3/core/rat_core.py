@@ -52,7 +52,7 @@ from pyproj import Transformer
 from scipy.spatial import cKDTree
 
 from core.rat_lidar import (lidar_bridge_decks, describe_deck_note,
-                            ELEV_SOURCE_SPAN, ELEV_SOURCES_UNMEASURED)
+                            ELEV_SOURCE_SPAN, ELEV_SOURCES_UNMEASURED, ELEV_SOURCE_LABELS)
 
 # -------------------------
 # Constants
@@ -5057,6 +5057,51 @@ def vertical_curves_on_measured(curves: List[Dict], res: dict, spacing_m: float)
         if not unmeasured[s:e + 1].any():
             kept.append(c)
     return kept
+
+
+def sight_warning_mask(df_vtx: pd.DataFrame, warning_ft: float) -> pd.Series:
+    """
+    Vertices to mark for sight distance: available sight distance under
+    warning_ft, except on a stretch of bridge deck with no lidar points (a gap
+    line or clearance floor, Elev_Source) or within
+    _UNMEASURED_CURVE_BUFFER_FT of one. As with vertical curves
+    (vertical_curves_on_measured), the profile there is drawn, not measured,
+    so a short sight distance there describes the method, not the road. The
+    Available_Sight_Dist_Ft values themselves are not changed. Distances along
+    the route come from Dist_Ft, else Dist_Mi, within each RouteId (and Part,
+    where present).
+    """
+    if "Available_Sight_Dist_Ft" not in df_vtx.columns:
+        return pd.Series(False, index=df_vtx.index)
+    mask = pd.to_numeric(df_vtx["Available_Sight_Dist_Ft"], errors="coerce") < float(warning_ft)
+    if "Elev_Source" not in df_vtx.columns or not mask.any():
+        return mask
+    labels = {ELEV_SOURCE_LABELS[k] for k in ELEV_SOURCES_UNMEASURED}
+    unmeasured = df_vtx["Elev_Source"].astype(str).isin(labels)
+    if not unmeasured.any():
+        return mask
+    if "Dist_Ft" in df_vtx.columns:
+        dist = pd.to_numeric(df_vtx["Dist_Ft"], errors="coerce")
+    elif "Dist_Mi" in df_vtx.columns:
+        dist = pd.to_numeric(df_vtx["Dist_Mi"], errors="coerce") * 5280.0
+    else:
+        return mask & ~unmeasured
+    keys = [k for k in ("RouteId", "Part") if k in df_vtx.columns]
+    groups = df_vtx.groupby(keys, sort=False).indices.values() if keys else [np.arange(len(df_vtx))]
+    near = np.zeros(len(df_vtx), dtype=bool)
+    d_all, u_all = dist.to_numpy(dtype=float), unmeasured.to_numpy()
+    for idx in groups:
+        idx = np.asarray(idx)
+        u = np.sort(d_all[idx][u_all[idx]])
+        if len(u) == 0:
+            continue
+        d = d_all[idx]
+        j = np.clip(np.searchsorted(u, d), 1, len(u)) if len(u) > 1 else np.zeros(len(d), dtype=int)
+        gap = np.abs(d - u[np.clip(j, 0, len(u) - 1)])
+        if len(u) > 1:
+            gap = np.minimum(gap, np.abs(d - u[j - 1]))
+        near[idx] = gap <= _UNMEASURED_CURVE_BUFFER_FT
+    return mask & ~pd.Series(near, index=df_vtx.index)
 
 
 def smooth_plan_profile_from_linestring(
