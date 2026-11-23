@@ -27,7 +27,7 @@ Needs laspy with a LAZ backend: pip install "laspy[lazrs]". Without it the
 RAT Suite keeps the straight lines and says so in the Run Log.
 
 CREATED BY: FHWA OHPI.
-VERSION: 3.3, November 22, 2026
+VERSION: 3.3, November 23, 2026
 """
 
 import os
@@ -1123,6 +1123,11 @@ LIDAR_TILE_PAUSE_S = 5.0
 # After this many bridges in a row fail to download (no network, or the
 # sources are down), lidar is not tried again in this process.
 LIDAR_MAX_NETWORK_FAILURES = 3
+# An empty lidar listing from The National Map is asked again this many
+# times, this many seconds apart (it sometimes lists nothing for an area it
+# lists at other times).
+LIDAR_TNM_EMPTY_RETRIES = 3
+LIDAR_TNM_EMPTY_WAIT_S = 20.0
 
 _FT_PER_M = 3.28084
 _network_failures = 0
@@ -1180,8 +1185,14 @@ def fetch_window_points(area_wgs, cache_dir: str, label: str = "") -> List[Dict]
     copy of 3DEP, read for the area only, else from whole USGS tiles clipped
     to it (LIDAR_TILE_FALLBACK, LIDAR_MAX_TILE_MB). Results are kept in
     cache_dir (an index file per area and one LAZ file per project), so a
-    later run reads them from disk. An area with no lidar is remembered too.
-    Network errors are raised to the caller.
+    later run reads them from disk. An empty listing is not kept: The National
+    Map sometimes lists nothing for an area it lists at other times, so the
+    next run asks again.
+    A project that cannot be downloaded is listed with an "error" and the
+    other projects are still returned; the index is then not saved, so the
+    next run tries that project again (the others are read from disk).
+    Network errors are raised to the caller only when no project could be
+    read (or The National Map cannot be reached).
     """
     key = _window_key(area_wgs.bounds)
     index_dir = os.path.join(cache_dir, "windows")
@@ -1191,14 +1202,15 @@ def fetch_window_points(area_wgs, cache_dir: str, label: str = "") -> List[Dict]
         try:
             with open(index_path, encoding="utf-8") as f:
                 entries = json.load(f)
-            if all(os.path.exists(p) for e in entries for p in e.get("files", [])):
+            if entries and all(os.path.exists(p) for e in entries for p in e.get("files", [])):
                 return entries
         except (OSError, ValueError):
             pass
 
-    items = query_tnm_lidar(area_wgs.bounds, empty_retries=1, empty_wait_s=10.0, attempts=2)
+    items = query_tnm_lidar(area_wgs.bounds, empty_retries=LIDAR_TNM_EMPTY_RETRIES,
+                            empty_wait_s=LIDAR_TNM_EMPTY_WAIT_S, attempts=2)
     tiles = list_lidar_tiles(items, area_wgs)
-    entries = []
+    entries, failures = [], []
     if not tiles.empty:
         order = (tiles.groupby("project").agg(year=("year", "max"), pub=("publication_date", "max"),
                                              mb=("size_mb", "sum"))
@@ -1209,43 +1221,62 @@ def fetch_window_points(area_wgs, cache_dir: str, label: str = "") -> List[Dict]
                 pdir = os.path.join(cache_dir, _safe_name(project))
                 os.makedirs(pdir, exist_ok=True)
                 entry = {"project": project, "year": int(order.loc[project, "year"]), "files": []}
-                name, info = find_ept(project, s)
-                if name:
-                    entry["source"] = "aws"
-                    out = os.path.join(pdir, f"{key}.laz")
-                    if not os.path.exists(out):
-                        fetch_ept_area(name, info, area_wgs, out, label=label,
-                                       max_depth=ept_depth_for_resolution(info, LIDAR_EPT_RESOLUTION_M),
-                                       quiet=True)
-                    if os.path.exists(out):
-                        entry["files"].append(out)
-                elif LIDAR_TILE_FALLBACK and float(order.loc[project, "mb"]) <= LIDAR_MAX_TILE_MB:
-                    entry["source"] = "usgs tiles"
-                    raw_dir = os.path.join(cache_dir, "_raw")
-                    os.makedirs(raw_dir, exist_ok=True)
-                    for row in tiles[tiles["project"] == project].itertuples(index=False):
-                        out = os.path.join(pdir, f"{key}_{row.tile}")
-                        if not os.path.exists(out):
-                            raw = os.path.join(raw_dir, row.tile)
-                            download_file(row.url, raw, s, pacer, attempts=4)
-                            crs = read_tile_crs(raw)
-                            source = "file"
-                            if crs is None:
-                                crs, _ = infer_tile_crs(raw, (row.min_lon, row.min_lat, row.max_lon, row.max_lat), [])
-                                source = "inferred"
-                            if crs is not None:
-                                clip_laz_to_corridor(raw, out, area_wgs, crs=crs, crs_source=source)
-                            try:
-                                os.remove(raw)
-                            except OSError:
-                                pass
-                        if os.path.exists(out):
-                            entry["files"].append(out)
-                else:
-                    entry["source"] = "not read (whole tiles over the size limit)"
+                try:
+                    _fetch_project(entry, project, tiles, order, s, pacer, pdir, key, area_wgs, cache_dir, label)
+                except Exception as e:
+                    entry["error"] = f"{type(e).__name__}: {str(e)[:160]}"
+                    failures.append(e)
                 entries.append(entry)
-    _write_json_atomic(index_path, entries)
+    if failures and not any(e.get("files") for e in entries):
+        raise failures[0]
+    for e in entries:
+        if e.get("error"):
+            logging.warning(f"Lidar project {e['project']} for a bridge on {label} could not be downloaded "
+                            f"({e['error']}); the deck is built from the other projects. Run again to add it.")
+    if entries and not failures:
+        _write_json_atomic(index_path, entries)
     return entries
+
+
+def _fetch_project(entry: Dict, project: str, tiles, order, s, pacer, pdir: str, key: str,
+                   area_wgs, cache_dir: str, label: str) -> None:
+    """Reads one project's points for the area into pdir (see
+    fetch_window_points), filling entry["source"] and entry["files"].
+    Network errors are raised."""
+    name, info = find_ept(project, s)
+    if name:
+        entry["source"] = "aws"
+        out = os.path.join(pdir, f"{key}.laz")
+        if not os.path.exists(out):
+            fetch_ept_area(name, info, area_wgs, out, label=label,
+                           max_depth=ept_depth_for_resolution(info, LIDAR_EPT_RESOLUTION_M),
+                           quiet=True)
+        if os.path.exists(out):
+            entry["files"].append(out)
+    elif LIDAR_TILE_FALLBACK and float(order.loc[project, "mb"]) <= LIDAR_MAX_TILE_MB:
+        entry["source"] = "usgs tiles"
+        raw_dir = os.path.join(cache_dir, "_raw")
+        os.makedirs(raw_dir, exist_ok=True)
+        for row in tiles[tiles["project"] == project].itertuples(index=False):
+            out = os.path.join(pdir, f"{key}_{row.tile}")
+            if not os.path.exists(out):
+                raw = os.path.join(raw_dir, row.tile)
+                download_file(row.url, raw, s, pacer, attempts=4)
+                crs = read_tile_crs(raw)
+                source = "file"
+                if crs is None:
+                    crs, _ = infer_tile_crs(raw, (row.min_lon, row.min_lat, row.max_lon, row.max_lat), [])
+                    source = "inferred"
+                if crs is not None:
+                    clip_laz_to_corridor(raw, out, area_wgs, crs=crs, crs_source=source)
+                try:
+                    os.remove(raw)
+                except OSError:
+                    pass
+            if os.path.exists(out):
+                entry["files"].append(out)
+    else:
+        entry["source"] = "not read (whole tiles over the size limit)"
 
 
 def _load_points(path: str, to_utm_from) -> Optional[Dict[str, np.ndarray]]:
@@ -1430,6 +1461,12 @@ def lidar_bridge_decks(z_fixed: np.ndarray, z_raw: np.ndarray, kind: np.ndarray,
 
         merged: Dict[int, float] = {}
         used = []
+        missing = [e["project"] for e in entries if e.get("error") and not e.get("files")]
+        partly = [e["project"] for e in entries if e.get("error") and e.get("files")]
+        if missing:
+            note["missing"] = missing
+        if partly:
+            note["partly"] = partly
         for entry in entries:
             parts = [p for p in (_load_points(f, to_utm_from) for f in entry.get("files", [])) if p]
             if not parts:
@@ -1525,7 +1562,8 @@ def lidar_bridge_decks(z_fixed: np.ndarray, z_raw: np.ndarray, kind: np.ndarray,
         note.update(used=True, projects=used, bins=int(len(keys)), measured_ft=round(measured_ft),
                     gap_ft=round(gap_ft), floor_ft=round(floor_ft, 1) if floor_ft else None,
                     nav_clearance_ft=round(nav_m * _FT_PER_M, 1) if nav_m else None,
-                    max_deck_ft=round(float(np.max(z_out[a:b + 1])) * _FT_PER_M, 1))
+                    max_deck_ft=round(float(np.max(z_out[a:b + 1][src[a:b + 1] == ELEV_SOURCE_LIDAR]))
+                                      * _FT_PER_M, 1) if measured_ft else None)
     return z_out, source, notes
 
 
@@ -1534,12 +1572,23 @@ def describe_deck_note(note: Dict) -> str:
     where = f"{note.get('label', '')} bridge ({note.get('length_ft', 0):,} ft)"
     if not note.get("used"):
         extra = f"; {'; '.join(note['rejected'])}" if note.get("rejected") else ""
+        extra += _download_note(note)
         return f"Lidar deck not used on {where}: {note.get('reason', 'no deck points')}{extra}."
-    text = (f"Lidar deck on {where}: {note['measured_ft']:,} ft measured, highest point "
-            f"{note['max_deck_ft']:,.1f} ft, from {'; '.join(note['projects'])}")
+    text = (f"Lidar deck on {where}: {note['measured_ft']:,} ft measured, highest measured point "
+            f"{note['max_deck_ft'] or 0:,.1f} ft, from {'; '.join(note['projects'])}")
     if note.get("gap_ft"):
         text += f"; {note['gap_ft']:,} ft with no deck points drawn as a straight line"
         if note.get("floor_ft"):
             text += (f", raised to {note['floor_ft']:,.1f} ft (water plus the NBI navigation clearance "
                      f"of {note['nav_clearance_ft']:,.1f} ft)")
-    return text + "."
+    return text + _download_note(note) + "."
+
+
+def _download_note(note: Dict) -> str:
+    """Run Log text for projects that were not downloaded, or only in part."""
+    parts = []
+    if note.get("missing"):
+        parts.append(f"not downloaded: {', '.join(note['missing'])}")
+    if note.get("partly"):
+        parts.append(f"only partly downloaded: {', '.join(note['partly'])}")
+    return f"; {'; '.join(parts)} (run again to complete)" if parts else ""
