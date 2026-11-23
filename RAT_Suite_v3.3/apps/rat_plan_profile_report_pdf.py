@@ -40,7 +40,7 @@ vertices in that direction of travel, the profile's reference point axis
 runs from high to low, and the cover page says so.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, November 20, 2026
+VERSION: 3.3, November 22, 2026
 """
 import os
 import re
@@ -81,6 +81,11 @@ try:
 except Exception:
     # Without core the sheets are drawn without the PI and tangent lines.
     curve_tangents = None
+try:
+    from core.rat_core import sight_warning_mask
+except Exception:
+    # Without core every point under the warning distance is marked.
+    sight_warning_mask = None
 try:
     from core.rat_dem_relief import (
         read_dem_window, hillshade_rgb, draw_relief, padded_lonlat_box, tiles_cover_route,
@@ -1232,6 +1237,15 @@ def make_pdf(vertices_csv, horizontal_csv, vertical_csv, pdf_out, route_id, dem_
                 # date when the PDF is made later from existing CSVs.
                 cover_date_str = sidecar_run_date
 
+    # Points marked for sight distance (none on or near deck drawn where the
+    # lidar has no points; see core sight_warning_mask).
+    if sight_warning_mask is not None:
+        blind_all = sight_warning_mask(vtx, sight_warning_ft).to_numpy()
+    elif 'Available_Sight_Dist_Ft' in vtx.columns:
+        blind_all = (vtx['Available_Sight_Dist_Ft'] < sight_warning_ft).to_numpy()
+    else:
+        blind_all = np.zeros(len(vtx), dtype=bool)
+
     # DEM tiles: --dem_dir, else DEM_DIR above, else the folder the
     # plan/profile run recorded in its run-parameters file.
     if read_dem_window is None:
@@ -1462,11 +1476,10 @@ def make_pdf(vertices_csv, horizontal_csv, vertical_csv, pdf_out, route_id, dem_
                 ax_prof.fill_between(sub_mp, sub_elev, min(sub_elev)-20, color='#e0e0e0', alpha=0.5, zorder=1)
                 # SIGHT DISTANCE SAFETY BAND
                 if 'Available_Sight_Dist_Ft' in vtx.columns:
-                    sub_asd = vtx.loc[mask, 'Available_Sight_Dist_Ft'].to_numpy()
                     y_min_limit = avg_elev - 95 # Bottom of the Y-axis
                     ax_prof.plot(sub_mp, [y_min_limit] * len(sub_mp), color='gray', linewidth=4, alpha=0.3, zorder=0)
 
-                    blind_mask_local = sub_asd < sight_warning_ft
+                    blind_mask_local = blind_all[mask]
                     if blind_mask_local.any():
                         ax_prof.scatter(sub_mp[blind_mask_local], [y_min_limit] * np.sum(blind_mask_local),
                                         color='red', s=10, marker='s',

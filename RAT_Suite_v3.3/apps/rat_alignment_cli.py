@@ -63,6 +63,7 @@ if RAT_SUITE_DIR not in sys.path:
 from core.rat_core import (
     build_params,
     SIGHT_WARNING_FT,
+    sight_warning_mask,
     SOCRATA_TOKEN as ENV_SOCRATA_TOKEN,
     write_gdf_with_retry,
     audit_route_ordering,
@@ -1992,7 +1993,7 @@ def _run_state_alignment(state_fips: str, out_dir: str, dem_dir: str, user_param
 
     if not df_vtx.empty and 'Available_Sight_Dist_Ft' in df_vtx.columns:
         total_pts = len(df_vtx)
-        blind_pts = (df_vtx['Available_Sight_Dist_Ft'] < SIGHT_WARNING_FT).sum()
+        blind_pts = int(sight_warning_mask(df_vtx, SIGHT_WARNING_FT).sum())
         pct_blind = (blind_pts / total_pts * 100) if total_pts > 0 else 0
         logging.info(f"Safety Profile:   {pct_blind:.1f}% of the network has an Available Sight Distance "
                      f"under {SIGHT_WARNING_FT:.0f} ft.")

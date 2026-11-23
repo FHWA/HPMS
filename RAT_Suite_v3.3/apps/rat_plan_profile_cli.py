@@ -75,6 +75,7 @@ from core.rat_core import (
     analyze_horizontal_curvature,
     analyze_vertical_parabolic,
     vertical_curves_on_measured,
+    sight_warning_mask,
     build_grade_segments,
     label_vertices_by_segments,
     add_speed_reference,
@@ -456,9 +457,10 @@ def generate_interactive_profile(df_vtx, df_h, df_v, out_path, route_id, params=
     ), row=2, col=1)
 
     # Points where available sight distance is under the warning distance
-    # (the stopping sight distance for the speed entered, else 400 ft)
+    # (the stopping sight distance for the speed entered, else 400 ft), not
+    # on or near bridge deck drawn where the lidar has no points
     if 'Available_Sight_Dist_Ft' in df_vtx.columns:
-        blind_mask = df_vtx['Available_Sight_Dist_Ft'] < sight_warning_ft
+        blind_mask = sight_warning_mask(df_vtx, sight_warning_ft)
         fig.add_trace(go.Scatter(
             x=df_vtx.loc[blind_mask, 'Milepost'],
             y=df_vtx.loc[blind_mask, 'Elev_Ft'],
