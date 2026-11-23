@@ -1391,7 +1391,11 @@ def lidar_bridge_decks(z_fixed: np.ndarray, z_raw: np.ndarray, kind: np.ndarray,
     2 tunnel); coords_m_raw: the densified HPMS line in UTM (utm_epsg);
     records: structure records from rat_core.build_structure_mask (NBI points
     carry "nav_clear_m"). Bridges shorter than LIDAR_MIN_SPAN_FT (params) are
-    left as they are. point_source(area_wgs) can replace the download (it
+    left as they are. A span that reaches the start or end of the profile
+    (a bridge running off the data at a State line) has no abutment at that
+    end: the measured deck is not checked against it and is carried level
+    from the nearest measured point out to the end (a gap line if that is
+    more than LIDAR_MAX_INTERP_FT). point_source(area_wgs) can replace the download (it
     returns the same list as fetch_window_points); used for tests.
 
     Returns (z, source, notes): the profile, the elevation source of each
@@ -1509,8 +1513,19 @@ def lidar_bridge_decks(z_fixed: np.ndarray, z_raw: np.ndarray, kind: np.ndarray,
         pos = np.minimum(a + keys * bin_pts + bin_pts / 2.0, b)
         zb = np.array([merged[k] for k in keys]) / _FT_PER_M        # m
         za, zb_end = z_fixed[a], z_fixed[b]
+        # A span reaching the start or end of the profile runs off the data
+        # (a bridge at a State line): that end has no abutment in the data,
+        # only the level line rat_core holds there. It is not checked, and
+        # the deck is carried out to it from the nearest measured point.
+        open_a, open_b = a == 0, b == n - 1
+        if open_a:
+            za = zb[0]
+        if open_b:
+            zb_end = zb[-1]
         bad_end = []
-        for at, z_end in ((a, za), (b, zb_end)):
+        for at, z_end, is_open in ((a, za, open_a), (b, zb_end, open_b)):
+            if is_open:
+                continue
             near = np.abs(pos - at) <= end_pts
             if near.any():
                 j = np.argmin(np.abs(pos - at))
@@ -1542,6 +1557,12 @@ def lidar_bridge_decks(z_fixed: np.ndarray, z_raw: np.ndarray, kind: np.ndarray,
                 continue
             seg[p:q + 1] = line
             src[p + 1:q] = ELEV_SOURCE_GAP
+            # Deck held level out to an open end, far from measured points:
+            # the end point is not measured either.
+            if j == 0 and open_a:
+                src[p] = ELEV_SOURCE_GAP
+            if j == len(kp) - 2 and open_b:
+                src[q] = ELEV_SOURCE_GAP
             gap_ft += (q - p) * spacing_m * _FT_PER_M
             if nav_m is not None and 0 < j < len(kp) - 2:
                 water = float(np.nanpercentile(z_raw[p:q + 1], 5))
