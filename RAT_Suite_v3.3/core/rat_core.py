@@ -25,13 +25,12 @@ calculus-based curvature analysis (kappa), and KDTree spatial indexing for
 4D geometry generation.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, November 23, 2026
+VERSION: 3.3, November 24, 2026
 """
 from typing import Dict, List, Tuple, Optional
 import math
 import os
 import glob
-import json
 import logging
 import time
 import random
@@ -60,8 +59,8 @@ from core.rat_lidar import (lidar_bridge_decks, describe_deck_note,
 FEET_PER_METER = 3.28084
 METRIC_R_TO_IMPERIAL_D = 1746.38  # deg per 100 ft from radius(m): D = 1746.38/R(m)
 
-# The smoothing factors (H_SMOOTH_FACTOR and its FS variants, and the
-# national V_SMOOTH_FACTOR) are set on one-mile chunks densified at 10 ft.
+# The smoothing factors (H_SMOOTH_FACTOR and V_SMOOTH_FACTOR) are set on
+# one-mile chunks densified at 10 ft.
 # A spline's s is a total squared residual, so it grows with the number of
 # points it is fitted to; spline_s() scales each factor to the points
 # actually fitted, so a factor smooths the same whatever the chunk length or
@@ -83,13 +82,16 @@ def spline_s(factor: float, n_points: int) -> float:
 # merge; 10 is the start of that range.
 NATIONAL_V_SMOOTH_FACTOR = 10.0
 
-# Horizontal smoothing factors by functional system where no state value is
-# available: the lower median of the calibrated state values
-# (national calibration of October 27, 2026, with the 6 ft departure limit
-# at curve points).
-NATIONAL_DEFAULTS = {
-    "H": {1: 75, 2: 100, 3: 30, 4: 30, 5: 30, 6: 30, 7: 75},
-}
+# One horizontal smoothing factor nationwide, for every State and
+# functional system. Chosen from as-built plan sets (OR 140, WFL Idaho
+# NF 17, and four Iowa Interstate projects: I-80 EB and WB, I-380 NB,
+# I-35 NB and SB), November 2026: with curve ends at the half-height points
+# (curve_ends_half_height), RAT curve lengths came closest to the plans'
+# PC-PT lengths at 30, among factors from 10 to 150. It replaces the factors
+# calibrated by State and functional system (October 2026), which were set
+# for classification stability rather than for curve ends and ran up to
+# 150 in some States.
+NATIONAL_H_SMOOTH_FACTOR = 30.0
 
 # ===========================================================================
 # CONFIGURATION: vertical curve classes
@@ -125,7 +127,13 @@ DEFAULTS = {
 
     # --- Horizontal curve detection ---
     'H_MIN_DELTA':                 3.5,
-    'H_MIN_CURVE_LENGTH_FT':       100.0,
+    'H_MIN_CURVE_LENGTH_FT':       100.0,   # measured run (detection)
+    # Shortest curve reported, PC to PT (curve_ends_half_height). The
+    # tests above are made on the measured run, which runs longer than
+    # PC-PT; this drops the few curves whose PC and PT nearly meet, such as
+    # a sharp peak on a flat curve. 25 ft keeps the shortest curves on the
+    # WFL Idaho NF 17 as-built plans (27-37 ft).
+    'H_MIN_PCPT_LENGTH_FT':        25.0,
     'H_MAX_RADIUS_FT':             165000.0,
     'H_USE_HMM_CLASSIFICATION':    True,
     'H_HMM_STICKINESS':            1.0,
@@ -189,14 +197,8 @@ DEFAULTS = {
     # line per state).
     'LOG_FSYSTEM_DETAIL':          False,
 
-    # --- Smoothing factors: H by functional system, V national ---
-    'H_SMOOTH_FACTOR':     NATIONAL_DEFAULTS["H"][1],
-    'H_SMOOTH_FACTOR_FS2': NATIONAL_DEFAULTS["H"][2],
-    'H_SMOOTH_FACTOR_FS3': NATIONAL_DEFAULTS["H"][3],
-    'H_SMOOTH_FACTOR_FS4': NATIONAL_DEFAULTS["H"][4],
-    'H_SMOOTH_FACTOR_FS5': NATIONAL_DEFAULTS["H"][5],
-    'H_SMOOTH_FACTOR_FS6': NATIONAL_DEFAULTS["H"][6],
-    'H_SMOOTH_FACTOR_FS7': NATIONAL_DEFAULTS["H"][7],
+    # --- Smoothing factors: one national H and one national V ---
+    'H_SMOOTH_FACTOR':     NATIONAL_H_SMOOTH_FACTOR,
     'V_SMOOTH_FACTOR':     NATIONAL_V_SMOOTH_FACTOR,
 }
 
@@ -1061,94 +1063,58 @@ def repair_structure_spans(
 # -------------------------
 # Parameter normalization
 # -------------------------
-H_FACTOR_KEYS = {1: "H_SMOOTH_FACTOR", **{fs: f"H_SMOOTH_FACTOR_FS{fs}" for fs in range(2, 8)}}
-
-
-def load_state_smoothing_factors(state_fips: str) -> Dict[str, float]:
-    """A state's calibrated horizontal smoothing factors from
-    national_smoothing_factors.json ({key: factor}, only the functional
-    systems the state has); empty if the state or file is missing."""
-    json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'national_smoothing_factors.json')
-    if not os.path.exists(json_path):
-        return {}
-    try:
-        with open(json_path, 'r') as f:
-            entry = json.load(f).get(str(state_fips).zfill(2)) or {}
-    except Exception as e:
-        logging.error(f"Failed to read national smoothing factors JSON: {e}")
-        return {}
-    return {k: v for k, v in entry.items() if v is not None and k in H_FACTOR_KEYS.values()}
-
-
 def describe_smoothing_factors(params: Dict) -> str:
     """
-    One line for the Run Log listing the smoothing factors a run uses: the
-    horizontal factor for each functional system, marked "state" (the
-    state's calibrated value), "national" (the national value, used where
-    the state has none) or "custom" (a value typed in or loaded from saved
-    settings), and the vertical factor.
+    One line for the Run Log giving the smoothing factors a run uses, each
+    marked "national" (NATIONAL_H_SMOOTH_FACTOR, NATIONAL_V_SMOOTH_FACTOR) or
+    "custom" (a value typed in or loaded from saved settings).
     """
-    fips = str(params.get("STATE_FIPS", "") or "").strip().zfill(2)
-    state = load_state_smoothing_factors(fips) if fips.isdigit() and fips != "00" else {}
-
     def _same(a, b):
         try:
             return abs(float(a) - float(b)) < 1e-9
         except (TypeError, ValueError):
             return False
 
-    parts = []
-    for fs, key in H_FACTOR_KEYS.items():
-        val = params.get(key, NATIONAL_DEFAULTS["H"][fs])
-        if key in state:
-            source = "state" if _same(val, state[key]) else "custom"
-        else:
-            source = "national" if _same(val, NATIONAL_DEFAULTS["H"][fs]) else "custom"
-        parts.append(f"FS {fs} {float(val):g} ({source})")
-    v = params.get("V_SMOOTH_FACTOR", NATIONAL_V_SMOOTH_FACTOR)
-    v_source = "national" if _same(v, NATIONAL_V_SMOOTH_FACTOR) else "custom"
-    label = f"State {fips}" if state else ("State " + fips if fips.isdigit() and fips != "00" else "this run")
-    return (f"Smoothing factors for {label}: horizontal " + ", ".join(parts)
-            + f"; vertical {float(v):g} ({v_source}).")
+    out = []
+    for lab, key, nat in (("horizontal", "H_SMOOTH_FACTOR", NATIONAL_H_SMOOTH_FACTOR),
+                          ("vertical", "V_SMOOTH_FACTOR", NATIONAL_V_SMOOTH_FACTOR)):
+        val = params.get(key, nat)
+        out.append(f"{lab} {float(val):g} ({'national' if _same(val, nat) else 'custom'})")
+    return "Smoothing factors: " + "; ".join(out) + "."
+
+
+# Settings from older run_params files that no method uses: the horizontal
+# smoothing factors by functional system and the switch that took them from
+# the State calibration file (replaced by the one national H_SMOOTH_FACTOR,
+# November 2026), vertical factors by functional system, and settings of
+# retired methods.
+_RETIRED_PARAMS = (
+    *(f'H_SMOOTH_FACTOR_FS{fs}' for fs in range(2, 8)),
+    *(f'V_SMOOTH_FACTOR_FS{fs}' for fs in range(2, 8)),
+    'IGNORE_GUI_SMOOTHING_FACTORS',
+    'H_BASE_SMOOTH_WINDOW', 'H_MIN_HEAD_CHANGE', 'H_LOOKAHEAD_DIST_M',
+    'V_REVERSAL_TOLERANCE', 'V_MERGE_GAP_FT',
+)
 
 
 def build_params(user_params: Optional[Dict] = None) -> Dict:
     p = DEFAULTS.copy()
 
-    # 1. Apply user params first (From GUI)
+    # User settings (from the GUI or a run_params file) over the defaults.
     if user_params:
         for k, v in user_params.items():
             if v is not None and str(v).strip() != "":
                 p[k] = v
 
-    # 2. Apply National Smoothing Factors over the top IF it's a batch run
-    if p.get('STATE_FIPS'):
-        state_fips = str(p['STATE_FIPS']).zfill(2)
-        if state_fips not in ["00", "AL"]:
-            # The state's factors come from the JSON unless
-            # IGNORE_GUI_SMOOTHING_FACTORS is explicitly False (a single-state
-            # GUI run, which uses the GUI values).
-            force_json = True
-            if user_params and "IGNORE_GUI_SMOOTHING_FACTORS" in user_params:
-                if not user_params["IGNORE_GUI_SMOOTHING_FACTORS"]:
-                    force_json = False
-
-            if force_json:
-                # Horizontal factors only; the vertical factor is national.
-                p.update(load_state_smoothing_factors(state_fips))
-
-    p['H_SMOOTH_FACTOR'] = float(p.get('H_SMOOTH_FACTOR', NATIONAL_DEFAULTS["H"][1]))
+    p['H_SMOOTH_FACTOR'] = float(p.get('H_SMOOTH_FACTOR') or NATIONAL_H_SMOOTH_FACTOR)
     p['V_SMOOTH_FACTOR'] = float(p.get('V_SMOOTH_FACTOR') or NATIONAL_V_SMOOTH_FACTOR)
-    for fs in range(2, 8):
-        p.pop(f'V_SMOOTH_FACTOR_FS{fs}', None)   # older run_params files
-    # Settings from older run_params files that no method uses.
-    for key in ('H_BASE_SMOOTH_WINDOW', 'H_MIN_HEAD_CHANGE', 'H_LOOKAHEAD_DIST_M',
-                'V_REVERSAL_TOLERANCE', 'V_MERGE_GAP_FT'):
+    for key in _RETIRED_PARAMS:
         p.pop(key, None)
     p['H_MIN_CHUNK_POINTS'] = max(int(p.get('H_MIN_CHUNK_POINTS', 23)), 8)
 
     p['DENSIFY_SPACING_M'] = p.get('DENSIFY_SPACING_FT', 5.0) / FEET_PER_METER
     p['H_MIN_CURVE_LENGTH_M'] = p.get('H_MIN_CURVE_LENGTH_FT', 100.0) / FEET_PER_METER
+    p['H_MIN_PCPT_LENGTH_M'] = float(p.get('H_MIN_PCPT_LENGTH_FT', 25.0)) / FEET_PER_METER
     p['H_MAX_RADIUS'] = p.get('H_MAX_RADIUS_FT', 165000.0) / FEET_PER_METER
     p['V_MIN_CURVE_LENGTH'] = p.get('V_MIN_CURVE_LENGTH_FT', 200.0) / FEET_PER_METER
     p['REGRESSION_WINDOW_M'] = p.get('REGRESSION_WINDOW_FT', 500.0) / FEET_PER_METER
@@ -1398,214 +1364,19 @@ def describe_record_filters(facility_filter=None, fsystem_filter=None, county_fi
 
 
 # ===========================================================================
-# NATIONAL CALIBRATION SHARED INFRASTRUCTURE
+# HPMS DATA ACCESS
 # ===========================================================================
-# Sampling, one-mile chunk generation and chunk preloading used by the
-# national calibration script in tools/ and by the plan/profile calibration
-# cross-check.
+# Socrata access token: blank in the delivered files; set RAT_SOCRATA_TOKEN
+# in the environment to raise Socrata's rate limits.
 SOCRATA_TOKEN = os.environ.get("RAT_SOCRATA_TOKEN", "")
 
-BASE_ENGINE_PARAMS = {
-    "DENSIFY_SPACING_FT":    10.0,
-    "H_MIN_DELTA":            3.5,
-    "H_MIN_CURVE_LENGTH_FT": 100.0,
-    "V_MIN_CURVE_LENGTH_FT": 200.0,
-    "V_MIN_GRADE_CHANGE":     0.5,
-    "ENABLE_MERGE":           False,
-    "MERGE_GAP_FLOOR_FT":    50.0,
-    "MERGE_GAP_PCT":         0.25,
-}
-
+# State FIPS codes of the 50 States, DC and Puerto Rico.
 ALL_FIPS = [
     "01","02","04","05","06","08","09","10","11","12","13","15","16",
     "17","18","19","20","21","22","23","24","25","26","27","28","29",
     "30","31","32","33","34","35","36","37","38","39","40","41","42",
     "44","45","46","47","48","49","50","51","53","54","55","56","72"
 ]
-
-
-
-def cochran_sample_size(population: int, variance: float = 0.25,
-                        confidence: float = 0.95,
-                        margin_of_error: float = 0.05) -> int:
-    """
-    Cochran's formula with finite population correction, generalized to a
-    multi-category outcome. `variance` replaces the original p*q term --
-    pass variance=0.25 (the default) to reproduce the original
-    conservative single-proportion (p=0.5) behavior, or a value from
-    get_cochran_variance() for a multi-category outcome (e.g. HPMS
-    reported curve severity class), which uses max_k[p_k*(1-p_k)] across
-    categories so precision is guaranteed for whichever category is
-    hardest to pin down, not just the average one.
-    """
-    z = {0.90: 1.645, 0.95: 1.960, 0.99: 2.576}.get(confidence, 1.960)
-    n0 = (z ** 2 * variance) / (margin_of_error ** 2)
-    n = n0 / (1 + (n0 - 1) / population)
-    return min(math.ceil(n), population)
-
-
-def load_curve_variance_lookup(json_path: str) -> Optional[dict]:
-    """
-    Loads the national_curve_class_proportions.json produced by
-    tools/pull_national_curve_distribution.py. Returns None (triggering a
-    fallback to the conservative p=0.5 default in get_cochran_variance)
-    if the file is missing or fails to parse -- this is an OPTIONAL
-    enhancement, not a hard requirement, so its absence shouldn't break
-    calibration for anyone who hasn't run the one-time pull script yet.
-    """
-    if not json_path or not os.path.exists(json_path):
-        logging.warning(f"Curve distribution JSON not found at {json_path} -- "
-                        f"Cochran sample sizing will use the conservative "
-                        f"p=0.5 default for every state/FS. Run "
-                        f"tools/pull_national_curve_distribution.py to "
-                        f"generate this file for more precise sample sizing.")
-        return None
-    try:
-        with open(json_path, "r") as f:
-            return json.load(f)
-    except Exception as e:
-        logging.warning(f"Failed to load curve distribution JSON at "
-                        f"{json_path}: {e} -- falling back to conservative "
-                        f"p=0.5 variance for Cochran sample sizing.")
-        return None
-
-
-def get_cochran_variance(lookup: Optional[dict], state_fips: str, f_sys: int) -> float:
-    """
-    Resolves the multi-category variance term for Cochran's sample-size
-    formula -- max_k[p_k*(1-p_k)] across HPMS-reported curve severity
-    classes (A-F) -- using STATE-level proportions if that state/FS has
-    enough reporting panels (see the JSON's "usable" flag), NATIONAL
-    proportions otherwise. Falls back to the conservative single-
-    proportion default (p=0.5 -> variance=0.25) if no curve distribution
-    data exists for this FS at either level -- this preserves the
-    ORIGINAL Cochran behavior as an ultimate safety net rather than
-    silently producing a wrong answer from missing data.
-    """
-    FALLBACK_VARIANCE = 0.25  # p=0.5, the original conservative default
-
-    if lookup is None:
-        return FALLBACK_VARIANCE
-
-    fs_key = str(f_sys)
-    state_entry = lookup.get("by_state", {}).get(state_fips, {}).get(fs_key)
-    if state_entry and state_entry.get("usable"):
-        props = state_entry["proportions"]
-        source = "state"
-    else:
-        national_entry = lookup.get("national", {}).get(fs_key)
-        if national_entry:
-            props = national_entry["proportions"]
-            source = "national"
-        else:
-            logging.warning(f"[{state_fips}] FS {f_sys}: no curve distribution "
-                            f"data at state OR national level -- falling back "
-                            f"to conservative p=0.5 variance.")
-            return FALLBACK_VARIANCE
-
-    if not props:
-        return FALLBACK_VARIANCE
-
-    variance = max(p * (1 - p) for p in props.values())
-    worst_cat = max(props, key=props.get)
-    logging.info(f"[{state_fips}] FS {f_sys}: Cochran variance from {source}-level "
-                f"curve distribution = {variance:.4f} "
-                f"(largest-variance category: {worst_cat}={props[worst_cat]:.3f})")
-    return variance
-
-
-def generate_1mile_chunks(wkt_list: list, start_mps: list = None, end_mps: list = None,
-                           shape_ids: list = None, join_tol_ft: float = 100.0) -> list:
-    """Stitches a route's WKT segments and slices into ~1-mile LineStrings.
-
-    Includes complete 1-mile chunks plus any tail segment >= 0.5 miles (800m);
-    a line shorter than a mile but at least 800 m long is one piece.
-    This ensures the population for Cochran sampling is not biased toward longer
-    routes and includes the full geometric diversity of the network.
-
-    Uses the same ShapeId-aware stitching as build_route_continuity_chunks
-    (this file) when shape_ids is given and every value is present --
-    walking segments in true digitization order rather than guessing
-    adjacency from spatial proximity alone. Falls back to
-    stitch_linestrings_ordered otherwise. join_tol_ft (default 100 ft, as
-    CHUNK_JOIN_TOLERANCE_FT) keeps either path from bridging a real gap
-    several hundred feet long, which would add curvature that is not on
-    the ground.
-    """
-    use_shapeid = shape_ids is not None and not any(pd.isna(s) for s in shape_ids)
-    if use_shapeid:
-        lines = stitch_linestrings_by_shapeid(
-            wkt_list, shape_ids, start_mps=start_mps, end_mps=end_mps,
-            coord_tol_ft=join_tol_ft)
-    else:
-        snap_tol_deg = join_tol_ft / 330000.0  # rough ft per degree, as in stitch_linestrings_ordered
-        lines = stitch_linestrings_ordered(wkt_list, snap_tol=snap_tol_deg,
-                                            start_mps=start_mps, end_mps=end_mps)
-    chunks = []
-    for line in lines:
-        if line.is_empty:
-            continue
-        lon, lat = line.coords[0]
-        utm      = get_appropriate_utm_zone(lon, lat)
-        fwd      = Transformer.from_crs("EPSG:4326", f"EPSG:{utm}", always_xy=True)
-        coords_m = [fwd.transform(x, y) for x, y in line.coords]
-        l_m      = LineString(coords_m).length
-        if l_m < 800.0:
-            continue    # shorter than the shortest piece kept (below)
-
-        # Generate complete 1-mile chunks
-        num_full_chunks = int(l_m / 1_609.34)  # Floor: how many full miles fit
-        for i in range(num_full_chunks):
-            chunks.append(substring(line,
-                                    (i * 1_609.34) / l_m,
-                                    ((i + 1) * 1_609.34) / l_m,
-                                    normalized=True))
-
-        # Include a tail segment of at least 0.5 miles (800 m), so the
-        # sample is not biased toward longer routes.
-        tail_length_m = l_m - (num_full_chunks * 1_609.34)
-        MIN_TAIL_M = 800.0  # 0.5 miles minimum
-
-        if tail_length_m >= MIN_TAIL_M:
-            chunks.append(substring(line,
-                                    (num_full_chunks * 1_609.34) / l_m,
-                                    1.0,  # End of line
-                                    normalized=True))
-
-    return chunks
-
-
-def _preload_chunk_for_h_sweep(args) -> Optional[dict]:
-    """
-    Called once per chunk before an H sweep begins. Returns a dict with
-    the projected, densified coordinates the horizontal Viterbi sweep
-    needs (no elevation), or None if the chunk can't be prepared.
-    """
-    chunk_geom, base_params = args
-    try:
-        lon, lat = chunk_geom.coords[0]
-        utm = get_appropriate_utm_zone(lon, lat)
-        fwd = Transformer.from_crs("EPSG:4326", f"EPSG:{utm}", always_xy=True)
-
-        coords_m  = [fwd.transform(x, y) for x, y in chunk_geom.coords]
-        coords_m  = densify_coords_line(coords_m, base_params["DENSIFY_SPACING_M"])
-        if len(coords_m) < base_params.get("H_MIN_CHUNK_POINTS", 23):
-            return None
-
-        x_raw     = np.array([c[0] for c in coords_m])
-        y_raw     = np.array([c[1] for c in coords_m])
-        spacing_m = LineString(coords_m).length / (len(coords_m) - 1)
-        d_axis    = np.arange(len(coords_m)) * spacing_m
-
-        return {
-            "x_raw":          x_raw,
-            "y_raw":          y_raw,
-            "d_axis":         d_axis,
-            "spacing_m":      spacing_m,
-            "utm_epsg":       utm,
-        }
-    except Exception:
-        return None
 
 
 def fetch_socrata_state(
@@ -3906,8 +3677,9 @@ def log_fsystem_summary(n_mixed: int, n_routes: int) -> None:
     if n_mixed:
         logging.info(
             f"{n_mixed:,} of {n_routes:,} routes span more than one functional system; each "
-            f"continuous piece uses the smoothing factor of the system covering most of its "
-            f"miles (LOG_FSYSTEM_DETAIL in core/rat_core.py DEFAULTS lists each piece).")
+            f"continuous piece takes the default reference speed of the system covering most "
+            f"of its miles where a record has no speed limit (LOG_FSYSTEM_DETAIL in "
+            f"core/rat_core.py DEFAULTS lists each piece).")
 
 
 def build_route_continuity_chunks(route_id: str, subset: pd.DataFrame, params: dict,
@@ -3922,11 +3694,10 @@ def build_route_continuity_chunks(route_id: str, subset: pd.DataFrame, params: d
         length_m, global_start_dist_m
     chunk_low_mp is reported as "Part": it identifies the piece.
 
-    f_sys, which selects the chunk's horizontal smoothing factor, is the
-    functional system with the most miles among the chunk's own records
-    (fs_miles), so a route that changes class takes the right factor on
-    each piece. This matches the calibration, which fits each factor to
-    records of that functional system.
+    f_sys is the functional system with the most miles among the chunk's
+    own records (fs_miles). It sets the default reference speed
+    (DEFAULT_SPEED_BY_FS_MPH) for curves whose HPMS record has no speed
+    limit; the smoothing factors are the same for every functional system.
 
     Where the route is not a single functional system, the choice for each
     piece is logged: in the Run Log with log_detail=True (a single
@@ -4312,6 +4083,43 @@ def arc_radius(headings_deg: np.ndarray, s: int, e: int, spacing_m: float,
     return points * spacing_m / math.radians(need)
 
 
+# Curve ends (PC and PT) of a horizontal curve
+# -------------------------
+# Share of the arc curvature (1 / arc_radius) at which a curve begins and
+# ends. Where a road goes from tangent to a circular arc, the smoothing
+# turns the step in curvature into a ramp centered on the PC (and PT), so
+# the curvature passes half the arc curvature at the PC. Where a spiral
+# leads into the arc, it passes half at about the middle of the spiral: the
+# end of the circular curve that would replace the spiral and arc. HPMS
+# reports curves and gives no instruction on spirals, so the curve is taken
+# from PC to PT with no allowance for them. Tested against as-built
+# plan sets (OR 140, WFL Idaho NF 17, four Iowa Interstate projects),
+# November 2026: on curves without spirals the median RAT length was 0.99
+# of the plan PC-PT length.
+H_END_CURVATURE_FRACTION = 0.5
+
+
+def curve_ends_half_height(kappa: np.ndarray, s: int, e: int, radius_m: float,
+                           fraction: float = H_END_CURVATURE_FRACTION) -> Tuple[int, int]:
+    """
+    Points (start, end) at which a curve begins and ends: walking in from
+    each of its measured ends s and e (where the curvature falls to the
+    straight-road threshold, 1 / H_MAX_RADIUS), the first point whose
+    curvature kappa (unsigned, of the smoothed line) reaches `fraction` of
+    the arc curvature 1 / radius_m (arc_radius). If no point reaches it, the
+    curve is the single point of highest curvature; if radius_m is not a
+    usable radius, the measured ends are returned.
+    """
+    if not (0 < radius_m < 99999) or e <= s:
+        return s, e
+    seg = kappa[s:e + 1]
+    hit = np.flatnonzero(seg >= fraction / radius_m)
+    if not hit.size:
+        peak = s + int(np.argmax(seg))
+        return peak, peak
+    return s + int(hit[0]), s + int(hit[-1])
+
+
 # Tangent lengths and point of intersection (PI) of a horizontal curve
 # -------------------------
 # Above this deflection the tangents at the two ends of a curve are close
@@ -4356,17 +4164,19 @@ def _tangent_fields(xs: np.ndarray, ys: np.ndarray, s: int, e: int,
     """
     PI_Dist and Tangent_ft for a curve record.
 
-    PI_Dist (m along the road) is the curve start plus the distance from it
-    to the PI where the tangents at the curve's two ends meet (curve_tangents),
-    the way a PI station is the PC station plus T. The PI itself depends
-    little on the smoothing.
+    s and e are the ends of the curve's measured run (Run_Start_Dist,
+    Run_End_Dist: where the curvature rises above and falls back to the
+    straight-road threshold), not its PC and PT: there the road is
+    straight, so the tangents give the PI.
+
+    PI_Dist (m along the road) is the run's start plus the distance from it
+    to the PI where the tangents at the run's two ends meet (curve_tangents).
+    The PI itself depends little on the smoothing.
 
     Tangent_ft is the tangent length of a circular curve with the reported
     radius and deflection, R tan(Delta/2), as given on design plans. It is
-    not the distance from the reported curve start to the PI: on the smoothed
-    line a curve begins before, and ends after, the design PC and PT, so that
-    distance runs longer than the plans' T. Both are nan from H_PI_MAX_DELTA
-    up.
+    not the distance from the reported PC to the PI, which is longer where
+    the curve has spirals. Both are nan from H_PI_MAX_DELTA up.
     """
     t_in, _ = curve_tangents(xs, ys, s, e, delta_deg)
     ok = delta_deg < H_PI_MAX_DELTA and 0 < radius_m < 99999
@@ -4800,6 +4610,10 @@ def analyze_horizontal_curvature(
 
     curves = []
     for s, e, sgn in pieces:
+        # The minimum length and deflection are tested on the measured run
+        # s-e. The reported length (PC to PT, below) is shorter, so it can
+        # fall under H_MIN_CURVE_LENGTH_FT; H_MIN_PCPT_LENGTH_FT sets its own
+        # minimum.
         length = (e - s) * spacing_m
         if length < min_len:
             continue
@@ -4820,44 +4634,33 @@ def analyze_horizontal_curvature(
         cbin = classify_bin(METRIC_R_TO_IMPERIAL_D / radius) if 0 < radius < 99999 else 'A'
         direction = "Left" if sgn > 0 else "Right"
 
-        # Spiral detection: find the central circular curve (SC to CS)
-        peak_idx = s + int(np.argmax(seg_kappa))
-        max_k = seg_kappa[peak_idx - s]
-
-        # A central circular curve maintains a near-constant maximum curvature.
-        # The central curve is where curvature is at least 85% of the peak.
-        core_threshold = max_k * 0.85
-        core_indices = np.where(seg_kappa >= core_threshold)[0]
-
-        if len(core_indices) > 0:
-            sc_idx_local = core_indices[0]
-            cs_idx_local = core_indices[-1]
-        else:
-            sc_idx_local = peak_idx - s
-            cs_idx_local = peak_idx - s
-
-        dist_to_sc_ft = sc_idx_local * spacing_m * FEET_PER_METER
-        dist_from_cs_ft = (len(seg_kappa) - 1 - cs_idx_local) * spacing_m * FEET_PER_METER
-
-        is_spiral = "Spiral" if (dist_to_sc_ft > 150.0 or dist_from_cs_ft > 150.0) else "Simple"
-
-        r_ft = radius * FEET_PER_METER
+        # The curve runs from its PC to its PT (curve_ends_half_height),
+        # inside the measured run s-e (Run_Start_Dist, Run_End_Dist). The
+        # deflection is the turn over the whole run, the deflection of the
+        # circular curve with the reported radius that would replace the
+        # road's curve (spirals included), and the PI comes from the
+        # tangents at the run's ends, where the road is straight.
+        pc, pt = curve_ends_half_height(kappa, s, e, radius)
+        length = (pt - pc) * spacing_m
+        # Compared in points, so a curve the minimum long at the actual
+        # spacing (about 5 ft, a little under or over) is kept.
+        if pt - pc < round(params.get('H_MIN_PCPT_LENGTH_M', 25.0 / FEET_PER_METER) / spacing_m):
+            continue
 
         curves.append({
-            'Start_Dist': s * spacing_m,
-            'End_Dist': e * spacing_m,
-            'SC_Dist': (s + sc_idx_local) * spacing_m,
-            'CS_Dist': (s + cs_idx_local) * spacing_m,
+            'Start_Dist': pc * spacing_m,
+            'End_Dist': pt * spacing_m,
+            'Run_Start_Dist': s * spacing_m,
+            'Run_End_Dist': e * spacing_m,
             'Length_m': length,
             'Length_ft': length * FEET_PER_METER,
             'Radius_m': radius,
-            'Radius_ft': r_ft,
+            'Radius_ft': radius * FEET_PER_METER,
             'Min_Radius_m': min_radius,
             'Delta': float(delta),
             'Dir': direction,
             'Bin': cbin,
             'Merge_Status': 'Simple',
-            'Transition_Type': is_spiral,
             **_tangent_fields(xs, ys, s, e, float(delta), radius, spacing_m),
         })
     return curves
@@ -4868,9 +4671,11 @@ def merge_horizontal_curves(curves: List[Dict], params: Dict,
     Joins same-direction curves separated by a short gap (MERGE_GAP_FLOOR_FT,
     MERGE_GAP_PCT) into one compound curve. coords_m_smooth and spacing_m
     are the smoothed line the curves were found on (as given to
-    analyze_horizontal_curvature); the radius (arc_radius), class, tangent
-    lengths and PI of a merged curve are measured again over its whole
-    extent.
+    analyze_horizontal_curvature). A merged curve runs from the first
+    curve's PC to the last curve's PT, and its measured run from the first
+    curve's Run_Start_Dist to the last curve's Run_End_Dist; its radius
+    (arc_radius), class, tangent length and PI are measured again over
+    that run, as in analyze_horizontal_curvature.
     """
     if not curves:
         return []
@@ -4892,25 +4697,18 @@ def merge_horizontal_curves(curves: List[Dict], params: Dict,
 
         if nxt['Dir'] == cur['Dir'] and gap_ft < gap_threshold_ft:
             cur['End_Dist'] = nxt['End_Dist']
+            cur['Run_End_Dist'] = nxt['Run_End_Dist']
             cur['Length_m'] = cur['End_Dist'] - cur['Start_Dist']
             cur['Length_ft'] = cur['Length_m'] * FEET_PER_METER
             cur['Min_Radius_m'] = min(cur.get('Min_Radius_m', 99999), nxt.get('Min_Radius_m', 99999))
             cur['Delta'] += nxt['Delta']
             cur['Merge_Status'] = 'Compound'
-
-            # Update the end of the central circular curve to the end of the merged compound curve
-            if 'CS_Dist' in nxt:
-                cur['CS_Dist'] = nxt['CS_Dist']
-
-            # Preserve spiral status if either constituent curve was a spiral
-            if cur.get('Transition_Type') == 'Spiral' or nxt.get('Transition_Type') == 'Spiral':
-                cur['Transition_Type'] = 'Spiral'
         else:
             merged.append(nxt.copy())
     for c in merged:
         if c.get('Merge_Status') == 'Compound':
-            s_i = int(round(c['Start_Dist'] / spacing_m))
-            e_i = min(int(round(c['End_Dist'] / spacing_m)), len(headings_array) - 1)
+            s_i = int(round(c['Run_Start_Dist'] / spacing_m))
+            e_i = min(int(round(c['Run_End_Dist'] / spacing_m)), len(headings_array) - 1)
             c['Radius_m'] = arc_radius(headings_array, s_i, e_i, spacing_m)
             c['Radius_ft'] = c['Radius_m'] * FEET_PER_METER
             r = c['Radius_m']
@@ -5162,7 +4960,6 @@ def smooth_plan_profile_from_linestring(
         line: LineString,
         dem_dir: str,
         params: dict,
-        f_sys: int = 1,
         route_id: str = None,
         chunk_s_mp: float = 0.0,
         chunk_e_mp: float = 0.0,
@@ -5201,9 +4998,7 @@ def smooth_plan_profile_from_linestring(
     x_raw = np.array([c[0] for c in coords_m])
     y_raw = np.array([c[1] for c in coords_m])
 
-    s_factor_h = params.get("H_SMOOTH_FACTOR", NATIONAL_DEFAULTS["H"][1])
-    if f_sys in range(2, 8):
-        s_factor_h = params.get(f"H_SMOOTH_FACTOR_FS{f_sys}", s_factor_h)
+    s_factor_h = params.get("H_SMOOTH_FACTOR", NATIONAL_H_SMOOTH_FACTOR)
     s_factor_v = params.get("V_SMOOTH_FACTOR", NATIONAL_V_SMOOTH_FACTOR)
 
     spacing_m = LineString(coords_m).length / (len(coords_m) - 1)

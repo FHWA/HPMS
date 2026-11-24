@@ -48,10 +48,11 @@ from core.rat_core import record_filter_rows
 # --- Core parameters: always visible in the panel/cover page. ---
 CORE_PARAM_SPECS = [
     ("DENSIFY_SPACING_FT",      "Densify Spacing (ft)"),
-    ("H_SMOOTH_FACTOR",         "H Smooth Factor (FS1)"),
-    ("V_SMOOTH_FACTOR",         "V Smooth Factor (all FS)"),
+    ("H_SMOOTH_FACTOR",         "H Smooth Factor"),
+    ("V_SMOOTH_FACTOR",         "V Smooth Factor"),
     ("H_MIN_DELTA",             "H Min Delta (deg)"),
     ("H_MIN_CURVE_LENGTH_FT",   "H Min Curve Length (ft)"),
+    ("H_MIN_PCPT_LENGTH_FT",    "H Min PC-PT Length (ft)"),
     ("V_MIN_CURVE_LENGTH_FT",   "V Min Curve Length (ft)"),
     ("V_MIN_GRADE_CHANGE",      "V Min Grade Change (%)"),
     ("USE_LIDAR_BRIDGE_DECKS",  "Bridge Decks from Lidar"),
@@ -83,9 +84,6 @@ ADVANCED_PARAM_SPECS = [
     ("CHUNK_SPLIT_PADDING_FT",   "Chunk Split Padding (ft)"),
 ]
 
-_FS_RANGE = range(2, 8)
-
-
 def _fmt_value(v) -> str:
     """Formats a param value for display: booleans as Yes/No, whole-number
     floats without a trailing .0, everything else via str()."""
@@ -114,8 +112,7 @@ def build_run_param_summary(
     Builds a display-ready summary of the parameters a run actually used.
 
     params is expected to be the dict returned by core.rat_core.build_params()
-    (i.e. already merged with DEFAULTS and, for state/batch runs, with any
-    national_smoothing_factors.json overrides), not the raw user_params
+    (i.e. already merged with DEFAULTS), not the raw user_params
     from the GUI or a CLI, so it records what ran rather than what was
     requested.
 
@@ -129,21 +126,12 @@ def build_run_param_summary(
         filters       -- list of {label, value}: county, facility types,
                          functional systems and owners processed
         core          -- list of {key, label, value} for CORE_PARAM_SPECS
-        fs_overrides  -- list of {fs, h} for the FS2-FS7 horizontal smoothing
-                         factors present in params (the vertical factor is
-                         national and listed under core)
         advanced      -- list of {key, label, value} for ADVANCED_PARAM_SPECS
     """
     core = [
         {"key": key, "label": label, "value": _fmt_value(params[key])}
         for key, label in CORE_PARAM_SPECS if key in params
     ]
-
-    fs_overrides = []
-    for fs in _FS_RANGE:
-        h_val = params.get(f"H_SMOOTH_FACTOR_FS{fs}")
-        if h_val is not None:
-            fs_overrides.append({"fs": fs, "h": _fmt_value(h_val)})
 
     advanced = [
         {"key": key, "label": label, "value": _fmt_value(params[key])}
@@ -165,7 +153,7 @@ def build_run_param_summary(
                for label, value in record_filter_rows(params, include_fsystem=include_fsystem)]
 
     return {"identity": identity, "filters": filters, "core": core,
-            "fs_overrides": fs_overrides, "advanced": advanced}
+            "advanced": advanced}
 
 
 def save_run_param_summary_json(summary: Dict, out_path: str) -> None:
@@ -257,22 +245,6 @@ def render_param_panel_html(summary: Dict, panel_id: str = "rat-params-panel") -
       {_rows(summary["filters"])}
     </table>"""
 
-    fs_html = ""
-    fs_overrides = summary.get("fs_overrides", [])
-    if fs_overrides:
-        fs_body = "\n".join(
-            f"<tr><td style='padding:2px 8px;'>FS{o['fs']}</td>"
-            f"<td style='padding:2px 8px;'>{esc(o['h'])}</td></tr>"
-            for o in fs_overrides
-        )
-        fs_html = f"""
-        <div style="margin-top:8px; font-weight:bold; color:#2c3e50;">Horizontal Smoothing by FS</div>
-        <table style="border-collapse:collapse; font-size:11px;">
-            <tr><th style="text-align:left; padding:2px 8px;">FS</th>
-                <th style="text-align:left; padding:2px 8px;">H</th></tr>
-            {fs_body}
-        </table>"""
-
     advanced_rows_html = _rows(summary.get("advanced", []))
 
     return f"""
@@ -292,7 +264,6 @@ def render_param_panel_html(summary: Dict, panel_id: str = "rat-params-panel") -
     <table style="border-collapse:collapse; font-size:11px;">
       {core_rows_html}
     </table>
-    {fs_html}
     <div id="{panel_id}-adv-toggle" style="cursor:pointer; color:#2c6ea4; text-decoration:underline; margin-top:10px; user-select:none;">
       &#9656; Advanced parameters
     </div>
