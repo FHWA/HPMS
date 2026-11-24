@@ -326,77 +326,6 @@ def limit_to_range(vtx_df: pd.DataFrame, h_curves: list, v_curves: list, segment
 def safe_route_name(route_id: str) -> str:
     return re.sub(r'[<>:"/\\|?*]+', "-", str(route_id)).strip()
 
-def generate_calibration_dashboard(sample_chunks, demdir, base_params, out_html_path, route_id, sweep_workers=None):
-    """
-    Single-route cross-check of the horizontal smoothing factor: runs the
-    national calibration's Viterbi classifier-stability search
-    (tools/rat_national_calibration.py) on this route's own sampled
-    one-mile segments and reports the result beside the factor this run
-    used. Informational only; it does not change the factors applied. The
-    vertical factor is a single national value (core.rat_core.
-    NATIONAL_V_SMOOTH_FACTOR) and is shown for reference. demdir is unused
-    (the horizontal search needs only the HPMS geometry).
-    """
-    import collections
-    from tools.rat_national_calibration import _h_viterbi_stability_search
-    from core.rat_core import _preload_chunk_for_h_sweep
-
-    if not sample_chunks:
-        logging.warning("Calibration cross-check: no sample chunks provided -- skipping.")
-        return
-
-    sweep_workers = sweep_workers or min(6, os.cpu_count() or 4)
-    predominant_f_sys = collections.Counter(c["f_sys"] for c in sample_chunks).most_common(1)[0][0]
-
-    chunks = [c for c in (_preload_chunk_for_h_sweep((c["geom"], base_params)) for c in sample_chunks)
-              if c is not None]
-    kappa_thresh = 1.0 / max(base_params.get("H_MAX_RADIUS", 165000.0 / FEET_PER_METER), 1e-6)
-    viterbi_h, viterbi_overlap, _ = _h_viterbi_stability_search(
-        chunks, kappa_thresh, base_params.get("H_HMM_STICKINESS", 1.0),
-        base_params.get("H_MIN_CURVE_LENGTH_M", 30.48), sweep_workers, route_id, predominant_f_sys)
-
-    suffix = "" if predominant_f_sys == 1 else f"_FS{predominant_f_sys}"
-    used_h = base_params.get(f"H_SMOOTH_FACTOR{suffix}", base_params.get("H_SMOOTH_FACTOR"))
-    used_v = base_params.get("V_SMOOTH_FACTOR")
-
-    def _fmt(val):
-        return f"{val:g}" if val is not None else "BLANK (did not stabilize)"
-
-    h_detail = f" (length-weighted overlap = {viterbi_overlap:.3f})" if viterbi_overlap == viterbi_overlap else ""
-
-    html = f"""
-    <html><head><title>Calibration Cross-Check - Route {route_id}</title>
-    <style>
-        body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 40px; background-color: #f8f9fa; color: #333; }}
-        h2 {{ color: #2c3e50; border-bottom: 2px solid #deff9a; padding-bottom: 10px; display: inline-block; }}
-        table {{ border-collapse: collapse; width: 90%; margin-top: 10px; background-color: white; box-shadow: 0 4px 6px rgba(0,0,0,0.1); border-radius: 8px; overflow: hidden; }}
-        th, td {{ padding: 12px; text-align: center; border-bottom: 1px solid #e9ecef; }}
-        th {{ background-color: #2c3e50; color: #deff9a; font-weight: bold; font-size: 15px; }}
-        .note {{ font-style: italic; color: #6c757d; margin-top: 20px; line-height: 1.6; max-width: 90%; }}
-    </style>
-    </head><body>
-    <h2>Calibration Cross-Check for Route {route_id}</h2>
-    <p>Runs the Viterbi-stability search used to build the national horizontal
-    smoothing factors against this route's own {len(sample_chunks)} randomly
-    sampled one-mile segments (predominant functional system:
-    FS{predominant_f_sys}). Informational only: it does not change the
-    factors this run applied.</p>
-    <table>
-        <tr><th>Axis</th><th>Route Sample Result</th><th>Factor Used (this run)</th></tr>
-        <tr><td><strong>Horizontal</strong></td><td>{_fmt(viterbi_h)}{h_detail}</td><td>{_fmt(used_h)}</td></tr>
-        <tr><td><strong>Vertical</strong></td><td>national factor, not calibrated by route</td><td>{_fmt(used_v)}</td></tr>
-    </table>
-    <div class="note">A close match supports the state/FS horizontal factor
-    for this route. A mismatch is worth a closer look at this route, but a
-    single route's sample is much noisier evidence than the state runs the
-    factors came from. "BLANK" means the search found no stable answer for
-    this sample.</div>
-    </body></html>
-    """
-
-    with open(out_html_path, "w", encoding="utf-8") as out_f:
-        out_f.write(html)
-
 def generate_interactive_profile(df_vtx, df_h, df_v, out_path, route_id, params=None,
                                  sight_warning_ft=SIGHT_WARNING_FT):
     """
@@ -765,7 +694,7 @@ def main():
         ensure_dem_cells_cached([info["geom"]], shared_cache_dir)
 
         res = smooth_plan_profile_from_linestring(
-            info["geom"], shared_cache_dir, params, info["f_sys"],
+            info["geom"], shared_cache_dir, params,
             route_id=route_norm, chunk_s_mp=chunk_s_mp, chunk_e_mp=chunk_e_mp,
             hpms_subset=sub, nbi_nti_gdf=nbi_nti_gdf
         )
@@ -797,7 +726,7 @@ def main():
             c["Calibrated_End_MP"] = chunk_s_mp + (c["End_Dist"] / total_len) * (chunk_e_mp - chunk_s_mp)
             if "PI_Dist" in c:
                 c["PI_MP"] = chunk_s_mp + (c["PI_Dist"] / total_len) * (chunk_e_mp - chunk_s_mp)
-            for key in ("Start_Dist", "End_Dist", "SC_Dist", "CS_Dist", "PI_Dist"):
+            for key in ("Start_Dist", "End_Dist", "Run_Start_Dist", "Run_End_Dist", "PI_Dist"):
                 if key in c:
                     c[key] += info["global_start_dist_m"]
         for c in v + g:
@@ -865,44 +794,6 @@ def main():
         logging.info(f"Saved run-parameters summary: {params_json_path}")
     except Exception as e:
         logging.warning(f"Could not save run-parameters summary JSON: {e}")
-
-    # --- CALIBRATION CROSS-CHECK ---
-    calibration_html = os.path.join(args.outdir, f"{base}_calibration_dashboard.html")
-    try:
-        from shapely.ops import substring
-        import random
-
-        # 1-mile test pieces, from the Begin/End RP range when one was
-        # entered (a piece is used when its midpoint is inside it).
-        test_segments = []
-        for chunk in all_chunks:
-            l_m = chunk["length_m"]
-            if l_m < 1600:
-                continue
-
-            num_miles = int(l_m / 1609.34)
-            for i in range(num_miles):
-                start_frac = (i * 1609.34) / l_m
-                end_frac = ((i + 1) * 1609.34) / l_m
-                mid_rp = chunk["rp_first"] + (start_frac + end_frac) / 2.0 * (chunk["rp_last"] - chunk["rp_first"])
-                if limited and not (rp_lo <= mid_rp <= rp_hi):
-                    continue
-                sub_geom = substring(chunk["geom"], start_frac, end_frac, normalized=True)
-                test_segments.append({"geom": sub_geom, "f_sys": chunk["f_sys"]})
-
-        sample_size = max(3, int(len(test_segments) * 0.20))
-
-        if test_segments:
-            sampled_chunks = random.sample(test_segments, min(sample_size, len(test_segments)))
-            logging.info(f"Running sensitivity sweep on {len(sampled_chunks)} random 1-mile segments...")
-            generate_calibration_dashboard(sampled_chunks, shared_cache_dir, params, calibration_html, route_norm)
-            logging.info(f"Saved calibration dashboard: {calibration_html}")
-        else:
-            logging.warning("Route (or Begin/End RP range) too short to extract 1-mile test segments "
-                            "for calibration.")
-
-    except Exception as e:
-        logging.warning(f"Failed to generate calibration dashboard: {e}")
 
     final_vtx_df['H_Curve_Type'] = 'Tangent'
     final_vtx_df['V_Curve_Type'] = 'Tangent'

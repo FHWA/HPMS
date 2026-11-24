@@ -474,7 +474,7 @@ def add_cover_page(pdf: PdfPages, route_id: str, mp_start: float, mp_end: float,
 
     param_summary is the dict from
     core.rat_param_summary.build_run_param_summary() (identity/core/
-    fs_overrides/advanced). If None (no run-parameters file found), the
+    advanced). If None (no run-parameters file found), the
     cover page shows only the route, milepost range, date and sheet count.
 
     overview_lon/overview_lat is the route centerline for the right-hand
@@ -559,7 +559,6 @@ def add_cover_page(pdf: PdfPages, route_id: str, mp_start: float, mp_end: float,
     if param_summary:
         core_items = param_summary.get("core", [])
         adv_items = param_summary.get("advanced", [])
-        fs_overrides = param_summary.get("fs_overrides", [])
 
         y -= 0.03
         fig.text(LX, y, "Run Parameters", fontsize=15, fontweight='bold')
@@ -580,24 +579,6 @@ def add_cover_page(pdf: PdfPages, route_id: str, mp_start: float, mp_end: float,
                 y -= 0.020
         if col == 1:
             y -= 0.020
-
-        if fs_overrides:
-            y -= 0.016
-            fig.text(LX, y, "Horizontal Smoothing by FS", fontsize=12,
-                     fontweight='bold', color='#2c3e50')
-            y -= 0.024
-            # Two columns (FS2-FS4, then FS5-FS7) to leave room for the
-            # advanced parameters.
-            half = (len(fs_overrides) + 1) // 2
-            for c in range(2 if len(fs_overrides) > 1 else 1):
-                fig.text(col_x[c], y, "FS", fontsize=9, fontweight='bold')
-                fig.text(col_x[c] + 0.08, y, "H Factor", fontsize=9, fontweight='bold')
-            y -= 0.019
-            for i, o in enumerate(fs_overrides):
-                c, r = divmod(i, half)
-                fig.text(col_x[c], y - r * 0.019, f"FS{o['fs']}", fontsize=9)
-                fig.text(col_x[c] + 0.08, y - r * 0.019, o['h'], fontsize=9)
-            y -= half * 0.019
 
         if adv_items:
             y -= 0.016
@@ -962,16 +943,22 @@ def vc_ssd_line(v) -> str:
 
 def curve_pi_points(hc, x_ft, y_ft, dist_ft) -> dict:
     """{row index: (start x, start y, PI x, PI y, end x, end y)} in the
-    route's projected feet, for each horizontal curve whose end tangents
-    meet (curve_tangents). Found once from the whole route, so a PI is
-    drawn on every sheet it falls on, even when the curve runs onto the
-    next sheet."""
+    route's projected feet, for each horizontal curve whose tangents meet
+    (curve_tangents). The tangents are taken at the ends of the curve's
+    measured run (Run_Start_Dist, Run_End_Dist), where core.rat_core takes
+    them, so the PI drawn is the one in PI_MP; tables from runs before these
+    columns existed use the curve's ends. Found once from the whole route,
+    so a PI is drawn on every sheet it falls on, even when the curve runs
+    onto the next sheet."""
     out = {}
     if curve_tangents is None or hc is None or hc.empty or len(dist_ft) < 3:
         return out
+    has_run = {'Run_Start_Dist', 'Run_End_Dist'} <= set(hc.columns)
     for idx, c in hc.iterrows():
-        s = int(np.clip(np.searchsorted(dist_ft, c['Start_Dist'] * FEET_PER_METER), 0, len(dist_ft) - 1))
-        e = int(np.clip(np.searchsorted(dist_ft, c['End_Dist'] * FEET_PER_METER), 0, len(dist_ft) - 1))
+        d0 = c['Run_Start_Dist'] if has_run and pd.notna(c['Run_Start_Dist']) else c['Start_Dist']
+        d1 = c['Run_End_Dist'] if has_run and pd.notna(c['Run_End_Dist']) else c['End_Dist']
+        s = int(np.clip(np.searchsorted(dist_ft, d0 * FEET_PER_METER), 0, len(dist_ft) - 1))
+        e = int(np.clip(np.searchsorted(dist_ft, d1 * FEET_PER_METER), 0, len(dist_ft) - 1))
         if e - s < 2:
             continue
         t_in, _ = curve_tangents(x_ft, y_ft, s, e, float(c.get('Delta', 180.0)))
@@ -1011,10 +998,8 @@ def horizontal_callout(c) -> str:
         x = c.get(key, np.nan)
         return float(x) if pd.notna(x) else np.nan
 
-    is_spiral = c.get('Transition_Type', 'Simple') == 'Spiral'
-    start_label, end_label = ("TS", "ST") if is_spiral else ("PC", "PT")
     head = f"Curve {int(c['Curve_No'])}  " if pd.notna(c.get('Curve_No', np.nan)) else ""
-    head += f"{c.get('Dir', '')}{' (spiral)' if is_spiral else ''}  Class {c.get('Bin', 'A')}"
+    head += f"{c.get('Dir', '')}  Class {c.get('Bin', 'A')}"
     lines = [head]
     pi_mp = num('PI_MP')
     if pd.notna(pi_mp):
@@ -1028,8 +1013,8 @@ def horizontal_callout(c) -> str:
         lines.append("e=NC (DEM)")
     elif pd.notna(num('Superelevation_Meas_Pct')):
         lines.append(f"e={num('Superelevation_Meas_Pct'):.1f}% (DEM)")
-    lines.append(f"{start_label}: RP {num('Calibrated_Start_MP'):.3f}")
-    lines.append(f"{end_label}: RP {num('Calibrated_End_MP'):.3f}")
+    lines.append(f"PC: RP {num('Calibrated_Start_MP'):.3f}")
+    lines.append(f"PT: RP {num('Calibrated_End_MP'):.3f}")
     return off_road_line(c) + "\n".join(lines)
 
 

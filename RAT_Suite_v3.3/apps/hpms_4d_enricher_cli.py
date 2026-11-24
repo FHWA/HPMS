@@ -342,7 +342,7 @@ def process_4d_item(route_id: str, item: dict, item_subset: pd.DataFrame, cache_
         for lon_idx, lat_idx in get_line_dem_cells([item["geom"]]):
             download_dem_cell(lon_idx, lat_idx, cache_dir)
         res = smooth_plan_profile_from_linestring(
-            item["geom"], cache_dir, params, item["f_sys"],
+            item["geom"], cache_dir, params,
             route_id=route_id, chunk_s_mp=item["calib_start_mp"], chunk_e_mp=item["calib_end_mp"],
             hpms_subset=item_subset, nbi_nti_gdf=WORKER_NBI_NTI_GDF,
         )

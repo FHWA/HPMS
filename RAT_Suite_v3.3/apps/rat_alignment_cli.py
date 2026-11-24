@@ -276,7 +276,7 @@ def process_chunk(route_id: str, item: dict, dem_dir: str, params: dict,
     emit_end_mp    = item["emit_end_mp"]
 
     res = smooth_plan_profile_from_linestring(
-        item["geom"], dem_dir, params, item["f_sys"],
+        item["geom"], dem_dir, params,
         route_id=route_id, chunk_s_mp=calib_start_mp, chunk_e_mp=calib_end_mp,
         hpms_subset=subset, nbi_nti_gdf=nbi_nti_gdf
     )
@@ -460,7 +460,7 @@ def process_chunk(route_id: str, item: dict, dem_dir: str, params: dict,
 
     # Distances along the route, on the same basis as the vertices' Dist_Mi.
     for c in h_curves + v_curves + g_all:
-        for key in ("Start_Dist", "End_Dist", "SC_Dist", "CS_Dist", "PI_Dist", "VPI_Dist"):
+        for key in ("Start_Dist", "End_Dist", "Run_Start_Dist", "Run_End_Dist", "PI_Dist", "VPI_Dist"):
             if key in c and c[key] is not None and not pd.isna(c[key]):
                 c[key] += offset_m
     h_all.extend(h_curves)
@@ -611,7 +611,6 @@ H_TOOLTIP_FIELDS = [
     ("PI_MP", "PI RP", 3),
     ("Dir", "Direction", None),
     ("Length_ft", "Length (ft)", 0),
-    ("Transition_Type", "Transition", None),
     ("Merge_Status", "Curve Type", None),
 ]
 V_TOOLTIP_FIELDS = [
@@ -1280,8 +1279,7 @@ def generate_dashboard(df_h, df_v, df_g, df_health, out_html, out_dir, state_fip
 
 <h3 style="margin-top:40px;">System Health</h3>
 <p style="color:#6c757d; max-width:800px;">Average spline deviation (RMSE) by functional system.
-Bars show the median deviation; error bars extend from the 80th to the 95th percentile.
-Refer to national_smoothing_factors.json for per-functional-system acceptance limits.</p>
+Bars show the median deviation; error bars extend from the 80th to the 95th percentile.</p>
 {_img("chart_health_rmse.png", "700px")}
 
 <h3 style="margin-top:40px;">Curve Density</h3>
@@ -1997,10 +1995,6 @@ def _run_state_alignment(state_fips: str, out_dir: str, dem_dir: str, user_param
         pct_blind = (blind_pts / total_pts * 100) if total_pts > 0 else 0
         logging.info(f"Safety Profile:   {pct_blind:.1f}% of the network has an Available Sight Distance "
                      f"under {SIGHT_WARNING_FT:.0f} ft.")
-
-    if not df_h.empty and 'Transition_Type' in df_h.columns:
-        spirals = (df_h['Transition_Type'] == 'Spiral').sum()
-        logging.info(f"Design Geometry:  {spirals:,} Engineered Spiral Transition curves detected.")
 
     logging.info("========================================")
     logging.info(f"Finished State {state_fips}.")

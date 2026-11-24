@@ -53,7 +53,7 @@ if RAT_SUITE_DIR not in sys.path:
     sys.path.insert(0, RAT_SUITE_DIR)
 
 from core.rat_core import (
-    fetch_socrata_state, NATIONAL_DEFAULTS, NATIONAL_V_SMOOTH_FACTOR, SSD_TABLE_FT,
+    fetch_socrata_state, NATIONAL_H_SMOOTH_FACTOR, NATIONAL_V_SMOOTH_FACTOR, SSD_TABLE_FT,
     OWNERSHIP_CODES, normalize_county_fips, record_filter_args, run_label,
     socrata_area_clauses, load_local_hpms, apply_facility_fsystem_filters,
     HPMS_FIELD_CATALOG,
@@ -383,7 +383,7 @@ class RATUnifiedGUI:
             "simplify_geometry": tk.BooleanVar(value=True),
 
             "densify_spacing_ft": tk.StringVar(value="5"),
-            "h_smooth_factor": tk.StringVar(value=str(NATIONAL_DEFAULTS["H"][1])),
+            "h_smooth_factor": tk.StringVar(value=f"{NATIONAL_H_SMOOTH_FACTOR:g}"),
             "v_smooth_factor": tk.StringVar(value=f"{NATIONAL_V_SMOOTH_FACTOR:g}"),
             "h_min_delta": tk.StringVar(value="3.5"),
             "h_min_curve_length_ft": tk.StringVar(value="100"),
@@ -440,11 +440,10 @@ class RATUnifiedGUI:
 
         # True while saved settings are being restored, so the restored
         # smoothing factors are not replaced as the State FIPS is set.
-        self._restoring_params = False
-        self._fips_after_id = None
 
         self.advanced_defaults = {
             "H_MAX_RADIUS_FT": tk.StringVar(value="165000"),
+            "H_MIN_PCPT_LENGTH_FT": tk.StringVar(value="25"),
             "V_VC_THRESHOLD": tk.StringVar(value="0.002"),
             "V_GAP_TOLERANCE": tk.StringVar(value="5"),
             "V_MIN_OFFSET_FT": tk.StringVar(value="0.10"),
@@ -454,12 +453,6 @@ class RATUnifiedGUI:
             "BRIDGE_MAX_LEN_FT": tk.StringVar(value="8200"),
             "TUNNEL_MAX_LEN_FT": tk.StringVar(value="10000"),
             "STRUCTURE_MATCH_TOL_FT": tk.StringVar(value="300"),
-            "H_SMOOTH_FACTOR_FS2": tk.StringVar(value=str(NATIONAL_DEFAULTS["H"][2])),
-            "H_SMOOTH_FACTOR_FS3": tk.StringVar(value=str(NATIONAL_DEFAULTS["H"][3])),
-            "H_SMOOTH_FACTOR_FS4": tk.StringVar(value=str(NATIONAL_DEFAULTS["H"][4])),
-            "H_SMOOTH_FACTOR_FS5": tk.StringVar(value=str(NATIONAL_DEFAULTS["H"][5])),
-            "H_SMOOTH_FACTOR_FS6": tk.StringVar(value=str(NATIONAL_DEFAULTS["H"][6])),
-            "H_SMOOTH_FACTOR_FS7": tk.StringVar(value=str(NATIONAL_DEFAULTS["H"][7])),
             "H_HMM_STICKINESS": tk.StringVar(value="1.0"),
             "V_HMM_STICKINESS": tk.StringVar(value="1.0"),
 
@@ -547,17 +540,6 @@ class RATUnifiedGUI:
         frame_state.grid(row=3, column=1, sticky="w")
         self.ent_state = ttk.Entry(frame_state, textvariable=self.vars["state_fips"], width=12)
         self.ent_state.pack(side=tk.LEFT)
-        # Entering a state fills in that state's calibrated smoothing
-        # factors (_on_state_fips_change); this button reloads them after
-        # the fields have been edited.
-        self.btn_load_factors = ttk.Button(
-            frame_state,
-            text="Reload State Factors",
-            command=self._reload_state_factors,
-            state="disabled"
-        )
-        self.btn_load_factors.pack(side=tk.LEFT, padx=4)
-        self.vars["state_fips"].trace_add("write", self._on_state_fips_change)
 
         ttk.Label(lf_input, text="Socrata Token (optional):").grid(row=3, column=2, sticky="e", pady=4)
         ttk.Entry(lf_input, textvariable=self.vars["socrata_token"], width=35).grid(row=3, column=3, sticky="w")
@@ -701,7 +683,7 @@ class RATUnifiedGUI:
         grp_h.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
         ttk.Label(grp_h, text="Densify Spacing (ft):").grid(row=0, column=0, sticky="e", pady=2)
         ttk.Entry(grp_h, textvariable=self.vars["densify_spacing_ft"], width=12).grid(row=0, column=1, sticky="w")
-        ttk.Label(grp_h, text="H Smooth Factor (FS 1):").grid(row=1, column=0, sticky="e", pady=2)
+        ttk.Label(grp_h, text="H Smooth Factor:").grid(row=1, column=0, sticky="e", pady=2)
         ttk.Entry(grp_h, textvariable=self.vars["h_smooth_factor"], width=12).grid(row=1, column=1, sticky="w")
         ttk.Label(grp_h, text="H Min Delta (deg):").grid(row=2, column=0, sticky="e", pady=2)
         ttk.Entry(grp_h, textvariable=self.vars["h_min_delta"], width=12).grid(row=2, column=1, sticky="w")
@@ -710,7 +692,7 @@ class RATUnifiedGUI:
 
         grp_v = ttk.LabelFrame(left, text="Vertical", padding=10)
         grp_v.grid(row=0, column=1, sticky="nsew", padx=6)
-        ttk.Label(grp_v, text="V Smooth Factor (all FS):").grid(row=0, column=0, sticky="e", pady=2)
+        ttk.Label(grp_v, text="V Smooth Factor:").grid(row=0, column=0, sticky="e", pady=2)
         ttk.Entry(grp_v, textvariable=self.vars["v_smooth_factor"], width=12).grid(row=0, column=1, sticky="w")
         ttk.Label(grp_v, text="V Min Curve Length (ft):").grid(row=1, column=0, sticky="e", pady=2)
         ttk.Entry(grp_v, textvariable=self.vars["v_min_curve_length_ft"], width=12).grid(row=1, column=1, sticky="w")
@@ -867,11 +849,7 @@ class RATUnifiedGUI:
         opens and by "Load Config", so every saved field is mapped back to
         its control in one place.
         """
-        self._restoring_params = True
-        try:
-            self._apply_params_values(data)
-        finally:
-            self._restoring_params = False
+        self._apply_params_values(data)
         self._toggle_source()
         self._update_ownership_button()
 
@@ -973,7 +951,7 @@ class RATUnifiedGUI:
         (name, value, default, var) for every processing setting, main and
         advanced, whose current value differs from its default. Smoothing
         factors are left out: each tool logs the factors it uses, marked
-        state, national or custom.
+        national or custom (and _check_smoothing_factors checks loaded ones).
         """
         current = {}
         for k, v in self._main_default_values().items():
@@ -1014,13 +992,13 @@ class RATUnifiedGUI:
     def _check_loaded_settings(self, source: str):
         """
         After settings are loaded from a file, checks the smoothing factors
-        against the state's calibrated values (_check_state_factors), then
+        against the national values (_check_smoothing_factors), then
         lists in the Run Log every other setting that differs from the
         current default. If any saved value is a
         default from an earlier version (RETIRED_DEFAULTS), offers to update
         just those to the current defaults.
         """
-        self._check_state_factors(source)
+        self._check_smoothing_factors(source)
         self._note_restored_limits(source)
 
         differs, retired = [], []
@@ -1079,142 +1057,33 @@ class RATUnifiedGUI:
     # ------------------------------------------------------------------
     # Smoothing factors
     # ------------------------------------------------------------------
-    @staticmethod
-    def _is_state_fips(fips: str) -> bool:
-        return fips.isdigit() and fips.zfill(2) != "00"
-
-    def _on_state_fips_change(self, *_):
+    def _check_smoothing_factors(self, source: str):
         """
-        Enables Reload State Factors for a single state and, unless saved
-        settings are being restored, fills in the factors for the State FIPS
-        entered. Filling waits until typing pauses, so "1" on the way to
-        "10" doesn't load Alabama.
+        After saved settings are restored, offers to replace smoothing
+        factors that differ from the national values. Settings saved before
+        November 2026 hold the factors then filled in by State and
+        functional system, which the one national horizontal factor
+        replaced; a value typed in on purpose can be kept.
         """
-        fips = self.vars["state_fips"].get().strip()
-        self.btn_load_factors.configure(state="normal" if self._is_state_fips(fips) else "disabled")
-        if self._restoring_params:
-            return
-        if self._fips_after_id is not None:
-            self.root.after_cancel(self._fips_after_id)
-        self._fips_after_id = self.root.after(600, self._fill_factors_for_entry)
-
-    def _fill_factors_for_entry(self):
-        self._fips_after_id = None
-        fips = self.vars["state_fips"].get().strip()
-        if self._is_state_fips(fips):
-            self._fill_state_factors(fips.zfill(2), announce=False)
-        elif not fips or fips == "00" or fips.upper() == "ALL":
-            # National run: each state's own factors are applied as it is
-            # processed. The fields hold the national values, which are used
-            # for any state without calibrated factors.
-            self._set_factor_fields(self._national_factor_values())
-
-    def _reload_state_factors(self):
-        fips = self.vars["state_fips"].get().strip()
-        if self._is_state_fips(fips):
-            self._fill_state_factors(fips.zfill(2), announce=True)
-
-    @staticmethod
-    def _national_factor_values() -> dict:
-        values = {"H_SMOOTH_FACTOR": NATIONAL_DEFAULTS["H"][1]}
-        for fs in range(2, 8):
-            values[f"H_SMOOTH_FACTOR_FS{fs}"] = NATIONAL_DEFAULTS["H"][fs]
-        return values
-
-    @staticmethod
-    def _read_factor_file() -> dict:
-        suite_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        json_path = os.path.join(suite_root, "core", "national_smoothing_factors.json")
-        with open(json_path, "r", encoding="utf-8") as f:
-            return json.load(f)
-
-    def _state_factor_values(self, fips: str):
-        """
-        (values, calibrated_keys) for a state: its calibrated horizontal
-        factors, with the national value for any functional system it has
-        none for -- the same values core.rat_core.build_params() applies.
-        Raises OSError/ValueError if the factor file can't be read.
-        """
-        values = self._national_factor_values()
-        calibrated = []
-        state = self._read_factor_file().get(fips) or {}
-        for k in values:
-            if state.get(k) is not None:
-                values[k] = state[k]
-                calibrated.append(k)
-        return values, calibrated
-
-    def _set_factor_fields(self, values: dict):
-        for k, v in values.items():
-            if k == "H_SMOOTH_FACTOR":
-                self.vars["h_smooth_factor"].set(str(v))
-            elif k in self.advanced_defaults:
-                self.advanced_defaults[k].set(str(v))
-
-    def _current_factor_fields(self) -> dict:
-        current = {"H_SMOOTH_FACTOR": self.vars["h_smooth_factor"].get()}
-        for fs in range(2, 8):
-            k = f"H_SMOOTH_FACTOR_FS{fs}"
-            current[k] = self.advanced_defaults[k].get()
-        return current
-
-    def _fill_state_factors(self, fips: str, announce: bool):
-        """Fills the smoothing-factor fields with the state's values and
-        notes in the Run Log which are calibrated and which national."""
-        try:
-            values, calibrated = self._state_factor_values(fips)
-        except Exception as e:
-            logging.error(f"Could not read core/national_smoothing_factors.json: {e}")
-            if announce:
-                messagebox.showerror("Smoothing Factors", f"Could not read the smoothing factors file:\n{e}")
-            return
-        self._set_factor_fields(values)
-
-        if not calibrated:
-            msg = (f"State {fips} has no calibrated smoothing factors; "
-                   "the national values are filled in.")
-            logging.warning(msg)
-        else:
-            national = [k for k in values if k not in calibrated]
-            msg = f"Filled in State {fips}'s calibrated horizontal smoothing factors."
-            if national:
-                msg += " National values used for: " + ", ".join(
-                    "FS 1" if k == "H_SMOOTH_FACTOR" else "FS " + k.rsplit("FS", 1)[1]
-                    for k in national) + "."
-            logging.info(msg)
-        if announce:
-            messagebox.showinfo("Smoothing Factors", msg)
-
-    def _check_state_factors(self, source: str):
-        """
-        After saved settings are restored for a single state, offers to
-        replace saved smoothing factors that differ from the state's
-        calibrated values (for example, settings saved before factors were
-        filled in automatically, or from an older calibration).
-        """
-        fips = self.vars["state_fips"].get().strip()
-        if not self._is_state_fips(fips):
-            return
-        fips = fips.zfill(2)
-        try:
-            values, _ = self._state_factor_values(fips)
-        except Exception:
-            return
-        current = self._current_factor_fields()
-        differs = [k for k, v in values.items() if not self._same_value(current.get(k), v)]
+        national = {"h_smooth_factor": f"{NATIONAL_H_SMOOTH_FACTOR:g}",
+                    "v_smooth_factor": f"{NATIONAL_V_SMOOTH_FACTOR:g}"}
+        labels = {"h_smooth_factor": "H Smooth Factor", "v_smooth_factor": "V Smooth Factor"}
+        differs = [(k, self.vars[k].get(), v) for k, v in national.items()
+                   if not self._same_value(self.vars[k].get(), v)]
         if not differs:
             return
-        listing = "\n".join(f"  {k}: {current.get(k)}  ->  {values[k]}" for k in differs)
-        logging.warning(f"Smoothing factors loaded from {source} differ from State {fips}'s:")
-        for k in differs:
-            logging.warning(f"    {k}: {current.get(k)} (State {fips}: {values[k]})")
+        logging.warning(f"Smoothing factors loaded from {source} differ from the national values:")
+        for k, saved, nat in differs:
+            logging.warning(f"    {labels[k]}: {saved} (national {nat})")
+        listing = "\n".join(f"  {labels[k]}: {saved}  ->  {nat}" for k, saved, nat in differs)
         if messagebox.askyesno(
             "Smoothing Factors",
-            f"These saved smoothing factors differ from State {fips}'s calibrated values:\n\n"
-            f"{listing}\n\nUse State {fips}'s values?",
+            "These saved smoothing factors differ from the national values:\n\n"
+            f"{listing}\n\nUse the national values?",
         ):
-            self._set_factor_fields(values)
-            logging.info(f"Using State {fips}'s smoothing factors.")
+            for k, _, nat in differs:
+                self.vars[k].set(nat)
+            logging.info("Using the national smoothing factors.")
         else:
             logging.info("Keeping the saved smoothing factors.")
 
@@ -1354,8 +1223,7 @@ class RATUnifiedGUI:
 
         adv_h_keys = [
             "H_MAX_RADIUS_FT",
-            "H_SMOOTH_FACTOR_FS2", "H_SMOOTH_FACTOR_FS3", "H_SMOOTH_FACTOR_FS4", 
-            "H_SMOOTH_FACTOR_FS5", "H_SMOOTH_FACTOR_FS6", "H_SMOOTH_FACTOR_FS7",
+            "H_MIN_PCPT_LENGTH_FT",
             "H_HMM_STICKINESS"
         ]
         
@@ -1518,9 +1386,6 @@ class RATUnifiedGUI:
             except Exception:
                 data[k] = val
 
-        is_national_run = (not state_fips_input or state_fips_input == "00" or state_fips_input.upper() == "ALL")
-        data["IGNORE_GUI_SMOOTHING_FACTORS"] = is_national_run
-
         params_path = os.path.join(out_dir, "run_params.json")
         with open(params_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
@@ -1560,7 +1425,7 @@ class RATUnifiedGUI:
     def _main_default_values(self) -> dict:
         return {
             "densify_spacing_ft":    "5",
-            "h_smooth_factor":       str(NATIONAL_DEFAULTS["H"][1]),
+            "h_smooth_factor":       f"{NATIONAL_H_SMOOTH_FACTOR:g}",
             "v_smooth_factor":       f"{NATIONAL_V_SMOOTH_FACTOR:g}",
             "h_min_delta":           "3.5",
             "h_min_curve_length_ft": "100",
@@ -1583,6 +1448,7 @@ class RATUnifiedGUI:
     def _advanced_default_values(self) -> dict:
         return {
             "H_MAX_RADIUS_FT":       "165000",
+            "H_MIN_PCPT_LENGTH_FT":  "25",
             "V_VC_THRESHOLD":        "0.002",
             "V_GAP_TOLERANCE":       "5",
             "V_MIN_OFFSET_FT":       "0.10",
@@ -1592,12 +1458,6 @@ class RATUnifiedGUI:
             "BRIDGE_MAX_LEN_FT":     "8200",
             "TUNNEL_MAX_LEN_FT":     "10000",
             "STRUCTURE_MATCH_TOL_FT": "300",
-            "H_SMOOTH_FACTOR_FS2":   str(NATIONAL_DEFAULTS["H"][2]),
-            "H_SMOOTH_FACTOR_FS3":   str(NATIONAL_DEFAULTS["H"][3]),
-            "H_SMOOTH_FACTOR_FS4":   str(NATIONAL_DEFAULTS["H"][4]),
-            "H_SMOOTH_FACTOR_FS5":   str(NATIONAL_DEFAULTS["H"][5]),
-            "H_SMOOTH_FACTOR_FS6":   str(NATIONAL_DEFAULTS["H"][6]),
-            "H_SMOOTH_FACTOR_FS7":   str(NATIONAL_DEFAULTS["H"][7]),
             "H_HMM_STICKINESS":      "1.0",
             "V_HMM_STICKINESS":      "1.0",
             "CHUNK_JOIN_TOLERANCE_FT": "100",
