@@ -27,13 +27,14 @@ Needs laspy with a LAZ backend: pip install "laspy[lazrs]". Without it the
 RAT Suite keeps the straight lines and says so in the Run Log.
 
 CREATED BY: FHWA OHPI.
-VERSION: 3.3, November 23, 2026
+VERSION: 3.3, November 25, 2026
 """
 
 import os
 import re
 import json
 import time
+import socket
 import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
@@ -59,6 +60,128 @@ TNM_LIDAR_DATASET = "Lidar Point Cloud (LPC)"
 MIN_NEW_COVERAGE = 0.01
 
 
+# ---------------------------------------------------------------------------
+# Several processes sharing one cache folder
+# ---------------------------------------------------------------------------
+# A State run reads lidar in many worker processes at once, all using the
+# same cache folder (often on a network drive), and two of them often need
+# the same file: both directions of an Interstate cross the same bridges,
+# and neighbouring pieces of a route overlap. So:
+#   - each process writes to its own temporary file (_tmp_path) and moves it
+#     into place only if no other process got there first (_move_into_place);
+#   - a file that is slow to get (a USGS tile, an area's lidar) is fetched by
+#     one process at a time: it claims the file with a lock file next to it
+#     (_claim_or_wait), and the others wait and then use the finished copy;
+#   - requests to one server are spaced across all the processes
+#     (DownloadPacer with shared_path).
+# A lock left by a process that has ended (a run that was stopped) is
+# cleared at once; one that cannot be checked (another computer) after
+# LOCK_STALE_S.
+LOCK_STALE_S = 3600.0
+LOCK_POLL_S = 5.0
+
+
+def _tmp_path(path: str) -> str:
+    """This process's temporary file for path."""
+    return f"{path}.{os.getpid()}.part"
+
+
+def _move_into_place(tmp: str, path: str) -> None:
+    """Moves tmp to path. If another process has already put path there and
+    has it open (Windows refuses the move), keeps that copy and drops tmp."""
+    try:
+        os.replace(tmp, path)
+    except PermissionError:
+        if not os.path.exists(path):
+            raise
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
+def _pid_alive(pid: int) -> bool:
+    """Whether a process with this ID is running on this computer."""
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(0x1000, False, pid)   # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return True
+            return code.value == 259                       # STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _lock_is_stale(lock: str, stale_s: float) -> bool:
+    """A lock is stale when the process that made it on this computer has
+    ended, or it is older than stale_s."""
+    try:
+        age = time.time() - os.path.getmtime(lock)
+        with open(lock, encoding="utf-8") as f:
+            host, pid = (f.read().split() + ["", ""])[:2]
+    except (OSError, ValueError):
+        return False
+    if age > stale_s:
+        return True
+    if host == socket.gethostname() and pid.isdigit():
+        return not _pid_alive(int(pid))
+    return False
+
+
+def _claim_or_wait(path: str, ready, stale_s: float = LOCK_STALE_S) -> bool:
+    """
+    Claims path for this process (a lock file path + ".lock"), unless ready()
+    is or becomes true, waiting while another process holds the claim.
+    Returns True if claimed (call _release afterwards), False if ready.
+    A process whose claim ends without the file (a failed download) leaves
+    it to the next one to claim.
+    """
+    lock = path + ".lock"
+    while True:
+        if ready():
+            return False
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            if _lock_is_stale(lock, stale_s):
+                try:
+                    os.remove(lock)
+                except OSError:
+                    pass
+                continue
+            time.sleep(LOCK_POLL_S)
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(f"{socket.gethostname()} {os.getpid()}")
+        if ready():
+            _release(path)
+            return False
+        return True
+
+
+def _release(path: str) -> None:
+    try:
+        os.remove(path + ".lock")
+    except OSError:
+        pass
+
+
 def reproject(geom, transformer: Transformer):
     """geom with its coordinates converted by a pyproj Transformer (shapely 2)."""
     return shapely.transform(
@@ -71,10 +194,14 @@ TNM_EMPTY_RETRIES = 3
 TNM_EMPTY_WAIT_S = 30.0
 
 
-def _tnm_get(params: dict, session: requests.Session, attempts: int = 5) -> dict:
+def _tnm_get(params: dict, session: requests.Session, attempts: int = 5,
+             pacer: "Optional[DownloadPacer]" = None) -> dict:
     for attempt in range(1, attempts + 1):
         try:
+            started = pacer.wait_turn() if pacer is not None else None
             r = session.get(TNM_PRODUCTS_URL, params=params, timeout=120)
+            if r.status_code in (429, 503) and pacer is not None:
+                pacer.throttled(started)
             if r.status_code in (429, 500, 502, 503, 504) and attempt < attempts:
                 wait = min(60, 5 * 2 ** (attempt - 1))
                 logging.warning(f"The National Map returned {r.status_code}; retrying in {wait}s...")
@@ -92,12 +219,14 @@ def _tnm_get(params: dict, session: requests.Session, attempts: int = 5) -> dict
 
 
 def query_tnm_lidar(bounds_wgs: tuple, empty_retries: int = TNM_EMPTY_RETRIES,
-                    empty_wait_s: float = TNM_EMPTY_WAIT_S, attempts: int = 5) -> list:
+                    empty_wait_s: float = TNM_EMPTY_WAIT_S, attempts: int = 5,
+                    pacer: "Optional[DownloadPacer]" = None) -> list:
     """Every lidar point cloud product in the box, from The National Map.
     The National Map sometimes answers with no products for an area it
     lists at other times, so an empty answer is asked again empty_retries
     times, empty_wait_s apart, before it is taken as final. A request that
-    fails is tried up to `attempts` times."""
+    fails is tried up to `attempts` times. pacer, if given, spaces the
+    requests (DownloadPacer)."""
     minx, miny, maxx, maxy = bounds_wgs
     for attempt in range(1, empty_retries + 2):
         items, offset, page = [], 0, 500
@@ -105,7 +234,7 @@ def query_tnm_lidar(bounds_wgs: tuple, empty_retries: int = TNM_EMPTY_RETRIES,
             while True:
                 params = {"datasets": TNM_LIDAR_DATASET, "bbox": f"{minx},{miny},{maxx},{maxy}",
                           "prodFormats": "LAZ", "max": page, "offset": offset, "outputFormat": "JSON"}
-                data = _tnm_get(params, session, attempts=attempts)
+                data = _tnm_get(params, session, attempts=attempts, pacer=pacer)
                 batch = data.get("items", []) or []
                 items.extend(batch)
                 total = int(data.get("total", len(items)) or 0)
@@ -253,34 +382,138 @@ def choose_lidar_projects(tiles: pd.DataFrame, choice, corridor_utm, to_utm: Tra
     return tiles
 
 
+# Shared request pacing (DownloadPacer). The pause between requests to one
+# server doubles on a refusal up to PACER_MAX_PAUSE_S, and halves after two
+# successes in a row or after PACER_EASE_AFTER_S with no further increase.
+PACER_MAX_PAUSE_S = 60.0
+PACER_EASE_AFTER_S = 300.0
+
+
 class DownloadPacer:
     """Spaces out requests to one server. Each request starts at least `pause`
     seconds after the previous one. When the server says it is getting too many
-    requests (HTTP 429 or 503), the pause doubles (up to max_pause); after
-    several successes in a row it eases back toward the configured pause."""
+    requests (HTTP 429 or 503), the pause doubles (up to max_pause), but only
+    for a request sent after the pause last went up: refusals of requests that
+    were already under way when it went up have been answered by that increase
+    and do not double it again. The pause halves after two successes in a row,
+    and also once PACER_EASE_AFTER_S pass with no increase, so a server that
+    refuses now and then cannot hold the pause at its limit.
 
-    def __init__(self, pause_s: float, max_pause_s: float = 180.0):
+    With shared_path (a small file in a cache folder), every process using
+    that file takes its turn from the same schedule and the same pause, so
+    the server sees one stream of requests however many processes there are,
+    and a refusal seen by one slows them all."""
+
+    def __init__(self, pause_s: float, max_pause_s: float = PACER_MAX_PAUSE_S, shared_path: Optional[str] = None):
         self.base = max(0.0, float(pause_s))
         self.pause = self.base
         self.max_pause = max(max_pause_s, self.base)
         self.last_start = 0.0
         self.ok_in_a_row = 0
+        self.raised_at = 0.0
+        self.shared_path = shared_path
 
-    def wait_turn(self) -> None:
-        wait = self.last_start + self.pause - time.time()
+    def _update(self, change) -> float:
+        """Applies change(state) to the schedule (last_start, pause,
+        ok_in_a_row, raised_at) and returns what it returns. With shared_path
+        the state is read from and written back to the file under a short
+        lock; if the lock cannot be had (a slow network drive), this process's
+        own schedule is used for that request."""
+        if not self.shared_path:
+            state = {"last_start": self.last_start, "pause": self.pause,
+                     "ok_in_a_row": self.ok_in_a_row, "raised_at": self.raised_at}
+            out = change(state)
+            self.last_start, self.pause = state["last_start"], state["pause"]
+            self.ok_in_a_row, self.raised_at = state["ok_in_a_row"], state["raised_at"]
+            return out
+        lock = self.shared_path + ".lock"
+        t0 = time.time()
+        while True:
+            try:
+                os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+                break
+            except FileExistsError:
+                try:
+                    if time.time() - os.path.getmtime(lock) > 10.0:   # held only briefly
+                        os.remove(lock)
+                        continue
+                except OSError:
+                    pass
+                if time.time() - t0 > 30.0:
+                    shared, self.shared_path = self.shared_path, None
+                    try:
+                        return self._update(change)
+                    finally:
+                        self.shared_path = shared
+                time.sleep(0.05)
+            except OSError:
+                shared, self.shared_path = self.shared_path, None
+                try:
+                    return self._update(change)
+                finally:
+                    self.shared_path = shared
+        try:
+            state = {"last_start": 0.0, "pause": self.base, "ok_in_a_row": 0, "raised_at": 0.0}
+            try:
+                with open(self.shared_path, encoding="utf-8") as f:
+                    state.update(json.load(f))
+            except (OSError, ValueError):
+                pass
+            state["pause"] = min(self.max_pause, max(self.base, float(state["pause"])))
+            out = change(state)
+            with open(self.shared_path, "w", encoding="utf-8") as f:
+                json.dump(state, f)
+            self.pause = state["pause"]
+            return out
+        finally:
+            try:
+                os.remove(lock)
+            except OSError:
+                pass
+
+    def _ease_with_time(self, state, now: float) -> None:
+        """Halves the pause once PACER_EASE_AFTER_S have passed since it last
+        went up (or last eased)."""
+        if float(state["pause"]) > self.base and now - float(state.get("raised_at", 0.0)) >= PACER_EASE_AFTER_S:
+            state["pause"] = max(self.base, float(state["pause"]) / 2)
+            state["raised_at"] = now
+
+    def wait_turn(self) -> float:
+        """Waits for this request's turn; returns the time (time.time()) at
+        which the request may start. Pass it to throttled() if the request
+        is refused."""
+        def take_slot(state):
+            now = time.time()
+            self._ease_with_time(state, now)
+            slot = max(now, float(state["last_start"]) + float(state["pause"]))
+            state["last_start"] = slot
+            return slot
+        slot = self._update(take_slot)
+        wait = slot - time.time()
         if wait > 0:
             time.sleep(wait)
-        self.last_start = time.time()
+        return slot
 
-    def throttled(self) -> None:
-        self.ok_in_a_row = 0
-        self.pause = min(self.max_pause, max(self.pause * 2, self.base, 10.0))
+    def throttled(self, started: Optional[float] = None) -> None:
+        """A request that started at `started` (from wait_turn) was refused.
+        The pause doubles only if that request was sent after the pause last
+        went up; started=None always counts."""
+        def slow_down(state):
+            if started is not None and started < float(state.get("raised_at", 0.0)):
+                return
+            state["ok_in_a_row"] = 0
+            state["pause"] = min(self.max_pause, max(float(state["pause"]) * 2, self.base, 10.0))
+            state["raised_at"] = time.time()
+        self._update(slow_down)
 
     def succeeded(self) -> None:
-        self.ok_in_a_row += 1
-        if self.ok_in_a_row >= 3 and self.pause > self.base:
-            self.pause = max(self.base, self.pause / 2)
-            self.ok_in_a_row = 0
+        def ease(state):
+            state["ok_in_a_row"] = int(state["ok_in_a_row"]) + 1
+            if state["ok_in_a_row"] >= 2 and float(state["pause"]) > self.base:
+                state["pause"] = max(self.base, float(state["pause"]) / 2)
+                state["ok_in_a_row"] = 0
+                state["raised_at"] = time.time()
+        self._update(ease)
 
 
 class ThrottledError(RuntimeError):
@@ -307,11 +540,12 @@ def download_file(url: str, dest: str, session: requests.Session, pacer: Downloa
     """Downloads url to dest (via a .part file). Requests are spaced by pacer.
     On 'too many requests' (429/503) it waits as the server asks (Retry-After),
     else 30 s, 60 s, 120 s ... up to 10 minutes; on other errors 10 s, 20 s, ...
-    Raises ThrottledError if every attempt was refused for too many requests."""
-    tmp = dest + ".part"
+    Raises ThrottledError if every attempt was refused for too many requests.
+    Writes to this process's own temporary file (_tmp_path)."""
+    tmp = _tmp_path(dest)
     throttled_every_time = True
     for attempt in range(1, attempts + 1):
-        pacer.wait_turn()
+        started = pacer.wait_turn()
         response = None
         try:
             with session.get(url, stream=True, timeout=300) as response:
@@ -321,14 +555,14 @@ def download_file(url: str, dest: str, session: requests.Session, pacer: Downloa
                 with open(tmp, "wb") as f:
                     for block in response.iter_content(chunk_size=4 * 1024 * 1024):
                         f.write(block)
-            os.replace(tmp, dest)
+            _move_into_place(tmp, dest)
             pacer.succeeded()
             return dest
         except (requests.RequestException, OSError) as e:
             status = getattr(getattr(e, "response", None), "status_code", None)
             busy = status in (429, 503)
             if busy:
-                pacer.throttled()
+                pacer.throttled(started)
                 wait = _retry_after_s(e.response)
                 if wait is None:
                     wait = min(600.0, 30.0 * 2 ** (attempt - 1))
@@ -347,6 +581,19 @@ def download_file(url: str, dest: str, session: requests.Session, pacer: Downloa
                             f"in {wait:.0f}s (requests now spaced {pacer.pause:.0f}s apart).")
             time.sleep(wait)
     return dest
+
+
+def download_shared(url: str, dest: str, session: requests.Session, pacer: DownloadPacer,
+                    attempts: int = 8) -> str:
+    """download_file for a cache shared by several processes: if dest is
+    already there it is used; if another process is downloading it, this one
+    waits for that copy (_claim_or_wait) instead of downloading it again."""
+    if not _claim_or_wait(dest, lambda: os.path.exists(dest)):
+        return dest
+    try:
+        return download_file(url, dest, session, pacer, attempts=attempts)
+    finally:
+        _release(dest)
 
 
 def _horizontal_crs(crs: CRS) -> CRS:
@@ -478,7 +725,7 @@ def clip_laz_to_corridor(src_path: str, dst_path: str, corridor_wgs, crs=None,
         shapely.prepare(poly)
         minx, miny, maxx, maxy = poly.bounds
         n_out = 0
-        tmp = dst_path + ".part"
+        tmp = _tmp_path(dst_path)
         with laspy.open(tmp, mode="w", header=out_header) as writer:
             for pts in reader.chunk_iterator(chunk_points):
                 x = np.asarray(pts.x)
@@ -492,7 +739,7 @@ def clip_laz_to_corridor(src_path: str, dst_path: str, corridor_wgs, crs=None,
                 if keep.any():
                     writer.write_points(pts[keep])
                     n_out += int(keep.sum())
-        os.replace(tmp, dst_path)
+        _move_into_place(tmp, dst_path)
         return {"points_in": int(header.point_count), "points_out": n_out,
                 "crs": crs.to_string(), "crs_source": crs_source, "clipped": True}
 
@@ -667,7 +914,7 @@ def fetch_ept_area(name: str, info: dict, area_wgs, out_path: str, label: str = 
         keep = _points_in(las, area_ept)
         return key, len(data), las.header, (las.points[keep] if keep.any() else None)
 
-    tmp = out_path + ".part"
+    tmp = _tmp_path(out_path)
     writer, out_header = None, None
     n_out, n_bytes, done = 0, 0, 0
     step = max(1, len(nodes) // 10)
@@ -707,7 +954,7 @@ def fetch_ept_area(name: str, info: dict, area_wgs, out_path: str, label: str = 
         if writer is not None:
             writer.close()
     if writer is not None:
-        os.replace(tmp, out_path)
+        _move_into_place(tmp, out_path)
     return {"nodes": len(nodes), "points_out": n_out, "mb_downloaded": round(n_bytes / 1e6, 1),
             "crs": crs.to_string()}
 
@@ -925,7 +1172,7 @@ def fetch_tiles(rows: list, lidar_dir: str, corridor_wgs, pacer: DownloadPacer,
             # whole, under the clipped name. Clip them now.
             logging.info(f"[{k}/{n}] {row.tile}: kept whole by an earlier run; clipping it now.")
             os.replace(clip_path, raw_path)
-        elif os.path.exists(raw_path) and not os.path.exists(raw_path + ".part"):
+        elif os.path.exists(raw_path):   # moved into place only when complete
             logging.info(f"[{k}/{n}] {row.tile}: downloaded earlier; clipping.")
         else:
             logging.info(f"[{k}/{n}] Downloading {row.tile} ({row.size_mb:.0f} MB)...")
@@ -1120,9 +1367,22 @@ LIDAR_MAX_PROJECTS = 3
 LIDAR_TILE_FALLBACK = True
 LIDAR_MAX_TILE_MB = 600.0
 LIDAR_TILE_PAUSE_S = 5.0
+# Requests to The National Map's product listing are spaced at least this
+# far apart, across all the processes of a run (DownloadPacer).
+LIDAR_TNM_PAUSE_S = 1.0
+# Whole USGS tiles are kept in the cache's _raw folder once downloaded, so
+# the other bridges on the same tile (often the other direction of the same
+# road) and later runs read them from disk instead of downloading them
+# again. Tiles are up to LIDAR_MAX_TILE_MB each; set False to delete each
+# one after it is clipped.
+LIDAR_KEEP_RAW_TILES = True
 # After this many bridges in a row fail to download (no network, or the
-# sources are down), lidar is not tried again in this process.
+# sources are down), lidar is not tried again in this process. A bridge
+# refused because USGS is limiting requests, or because another process had
+# the file open, does not count (_is_contention): it is tried again once at
+# the end of the piece of road, after LIDAR_RETRY_WAIT_S.
 LIDAR_MAX_NETWORK_FAILURES = 3
+LIDAR_RETRY_WAIT_S = 120.0
 # An empty lidar listing from The National Map is asked again this many
 # times, this many seconds apart (it sometimes lists nothing for an area it
 # lists at other times).
@@ -1171,10 +1431,10 @@ def _window_key(bounds: tuple) -> str:
 
 
 def _write_json_atomic(path: str, data) -> None:
-    tmp = path + ".part"
+    tmp = _tmp_path(path)
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=1, default=str)
-    os.replace(tmp, path)
+    _move_into_place(tmp, path)
 
 
 def fetch_window_points(area_wgs, cache_dir: str, label: str = "") -> List[Dict]:
@@ -1198,24 +1458,42 @@ def fetch_window_points(area_wgs, cache_dir: str, label: str = "") -> List[Dict]
     index_dir = os.path.join(cache_dir, "windows")
     os.makedirs(index_dir, exist_ok=True)
     index_path = os.path.join(index_dir, f"{key}.json")
-    if os.path.exists(index_path):
-        try:
-            with open(index_path, encoding="utf-8") as f:
-                entries = json.load(f)
-            if entries and all(os.path.exists(p) for e in entries for p in e.get("files", [])):
-                return entries
-        except (OSError, ValueError):
-            pass
+    found = []
 
+    def cached():
+        if os.path.exists(index_path):
+            try:
+                with open(index_path, encoding="utf-8") as f:
+                    entries = json.load(f)
+                if entries and all(os.path.exists(p) for e in entries for p in e.get("files", [])):
+                    found[:] = [entries]
+                    return True
+            except (OSError, ValueError):
+                pass
+        return False
+
+    # Another process reading the same area (an overlapping piece of road)
+    # is waited for, and its result used (_claim_or_wait).
+    if not _claim_or_wait(index_path, cached):
+        return found[0]
+    try:
+        return _fetch_window(area_wgs, cache_dir, label, key, index_path)
+    finally:
+        _release(index_path)
+
+
+def _fetch_window(area_wgs, cache_dir: str, label: str, key: str, index_path: str) -> List[Dict]:
+    """fetch_window_points once the area is claimed."""
+    tnm_pacer = DownloadPacer(LIDAR_TNM_PAUSE_S, shared_path=os.path.join(cache_dir, "_pace_tnm.json"))
     items = query_tnm_lidar(area_wgs.bounds, empty_retries=LIDAR_TNM_EMPTY_RETRIES,
-                            empty_wait_s=LIDAR_TNM_EMPTY_WAIT_S, attempts=2)
+                            empty_wait_s=LIDAR_TNM_EMPTY_WAIT_S, attempts=2, pacer=tnm_pacer)
     tiles = list_lidar_tiles(items, area_wgs)
     entries, failures = [], []
     if not tiles.empty:
         order = (tiles.groupby("project").agg(year=("year", "max"), pub=("publication_date", "max"),
                                              mb=("size_mb", "sum"))
                  .sort_values(["year", "pub"], ascending=False))
-        pacer = DownloadPacer(LIDAR_TILE_PAUSE_S)
+        pacer = DownloadPacer(LIDAR_TILE_PAUSE_S, shared_path=os.path.join(cache_dir, "_pace_usgs.json"))
         with requests.Session() as s:
             for project in list(order.index)[:LIDAR_MAX_PROJECTS]:
                 pdir = os.path.join(cache_dir, _safe_name(project))
@@ -1261,7 +1539,7 @@ def _fetch_project(entry: Dict, project: str, tiles, order, s, pacer, pdir: str,
             out = os.path.join(pdir, f"{key}_{row.tile}")
             if not os.path.exists(out):
                 raw = os.path.join(raw_dir, row.tile)
-                download_file(row.url, raw, s, pacer, attempts=4)
+                download_shared(row.url, raw, s, pacer, attempts=4)
                 crs = read_tile_crs(raw)
                 source = "file"
                 if crs is None:
@@ -1269,10 +1547,11 @@ def _fetch_project(entry: Dict, project: str, tiles, order, s, pacer, pdir: str,
                     source = "inferred"
                 if crs is not None:
                     clip_laz_to_corridor(raw, out, area_wgs, crs=crs, crs_source=source)
-                try:
-                    os.remove(raw)
-                except OSError:
-                    pass
+                if not LIDAR_KEEP_RAW_TILES:
+                    try:
+                        os.remove(raw)
+                    except OSError:
+                        pass   # another process is reading it
             if os.path.exists(out):
                 entry["files"].append(out)
     else:
@@ -1370,6 +1649,16 @@ def _clearance_floor(p: int, q: int, zp: float, zq: float, g_in: Optional[float]
     return np.maximum(prof, line)
 
 
+def _is_contention(e: Exception) -> bool:
+    """A failure that says nothing about the network: USGS limiting
+    requests (ThrottledError, HTTP 429/503), or another process having the
+    file open (PermissionError, Windows error 32)."""
+    if isinstance(e, (ThrottledError, PermissionError)):
+        return True
+    status = getattr(getattr(e, "response", None), "status_code", None)
+    return status in (429, 503)
+
+
 def _span_runs(kind: np.ndarray, which: int = 1) -> List[Tuple[int, int]]:
     m = np.asarray(kind) == which
     if not m.any():
@@ -1438,12 +1727,26 @@ def lidar_bridge_decks(z_fixed: np.ndarray, z_raw: np.ndarray, kind: np.ndarray,
     end_pts = LIDAR_END_CHECK_FT / _FT_PER_M / spacing_m
     tol_pts = float(params.get("STRUCTURE_MATCH_TOL_FT", 300.0)) / _FT_PER_M / spacing_m
 
-    for a, b in runs:
+    # Bridges refused for contention (_is_contention) are tried once more,
+    # at the end, after LIDAR_RETRY_WAIT_S; their notes keep their place.
+    pending = [(a, b, None) for a, b in runs]
+    waited = False
+    i = 0
+    while i < len(pending):
+        a, b, note = pending[i]
+        i += 1
         if point_source is None and _disabled_reason is not None:
             break
-        note = {"label": label, "start": int(a), "end": int(b),
-                "length_ft": round((b - a) * spacing_m * _FT_PER_M), "used": False}
-        notes.append(note)
+        retry = note is not None
+        if retry:
+            if not waited:
+                time.sleep(LIDAR_RETRY_WAIT_S)
+                waited = True
+            note.pop("reason", None)
+        else:
+            note = {"label": label, "start": int(a), "end": int(b),
+                    "length_ft": round((b - a) * spacing_m * _FT_PER_M), "used": False}
+            notes.append(note)
         a0, b0 = max(0, a - pad), min(n - 1, b + pad)
         area_utm = LineString(xy[a0:b0 + 1]).buffer(LIDAR_WINDOW_HALF_WIDTH_FT / _FT_PER_M)
         area_wgs = reproject(area_utm, to_wgs)
@@ -1454,6 +1757,14 @@ def lidar_bridge_decks(z_fixed: np.ndarray, z_raw: np.ndarray, kind: np.ndarray,
             why = f"{type(e).__name__}: {str(e)[:160]}"
             note["reason"] = f"download failed ({why})"
             if point_source is None:
+                if _is_contention(e):
+                    if not retry:
+                        logging.warning(f"Lidar for a bridge on {label} could not be read yet ({why}); "
+                                        f"it will be tried again at the end of this piece of road.")
+                        pending.append((a, b, note))
+                    else:
+                        logging.warning(f"Lidar for a bridge on {label} could not be read ({why}).")
+                    continue
                 _network_failures += 1
                 logging.warning(f"Lidar for a bridge on {label} could not be read ({why}).")
                 if _network_failures >= LIDAR_MAX_NETWORK_FAILURES:

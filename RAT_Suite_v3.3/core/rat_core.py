@@ -25,7 +25,7 @@ calculus-based curvature analysis (kappa), and KDTree spatial indexing for
 4D geometry generation.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, November 24, 2026
+VERSION: 3.3, November 25, 2026
 """
 from typing import Dict, List, Tuple, Optional
 import math
@@ -86,8 +86,10 @@ NATIONAL_V_SMOOTH_FACTOR = 10.0
 # functional system. Chosen from as-built plan sets (OR 140, WFL Idaho
 # NF 17, and four Iowa Interstate projects: I-80 EB and WB, I-380 NB,
 # I-35 NB and SB), November 2026: with curve ends at the half-height points
-# (curve_ends_half_height), RAT curve lengths came closest to the plans'
-# PC-PT lengths at 30, among factors from 10 to 150. It replaces the factors
+# (curve_ends_half_height), RAT curve lengths matched the plans' PC-PT
+# lengths best at 30 and 50 (median |length / plan - 1| 0.25), among factors
+# from 10 to 150; at 50 and above short, flat Interstate curves came out
+# too long (I-80 EB 1.62 times plan), so 30 was adopted. It replaces the factors
 # calibrated by State and functional system (October 2026), which were set
 # for classification stability rather than for curve ends and ran up to
 # 150 in some States.
@@ -147,6 +149,7 @@ DEFAULTS = {
     'REGRESSION_WINDOW_FT':        500.0,
     'V_USE_HMM_CLASSIFICATION':    True,
     'V_HMM_STICKINESS':            1.0,
+    'V_FIT_DESIGN_PROFILE':        False,
 
     # --- Structure (bridge/tunnel) profile repair ---
     # A bridge in a bare-earth DEM shows as a gap (sharp drop, sharp rise);
@@ -4722,8 +4725,16 @@ def merge_horizontal_curves(curves: List[Dict], params: Dict,
 def analyze_vertical_parabolic(
         z_smooth: np.ndarray,
         spacing_m: float,
-        params: Dict
+        params: Dict,
+        z_fit: Optional[np.ndarray] = None
     ) -> List[Dict]:
+    """
+    Vertical curves of a smoothed profile. Candidate curves are found where
+    the smoothed profile's grade changes (STEP 1) and each is fitted with a
+    parabola (STEP 2). With V_FIT_DESIGN_PROFILE (off by default), their geometry
+    is then fitted as a design profile to z_fit, the repaired profile before
+    smoothing (z_smooth if None): see fit_vertical_curves().
+    """
     grads = np.gradient(z_smooth, spacing_m) * 100.0
     gchg = np.gradient(grads, spacing_m)
 
@@ -4859,7 +4870,254 @@ def analyze_vertical_parabolic(
             'Design_Speed_Supported_Mph': speed,
             'VC_Class': vertical_curve_class(speed),
         })
+    if params.get('V_FIT_DESIGN_PROFILE', False) and curves:
+        curves = fit_vertical_curves(curves, z_smooth if z_fit is None else z_fit, z_smooth, spacing_m, params)
     return curves
+
+
+# -------------------------
+# Vertical curves as a design profile
+# -------------------------
+# The curves found above come from the smoothed profile, which the
+# smoothing spreads: their measured runs are much longer than the design
+# curves (1.3 to 1.9 times on test roads and synthetic profiles) and the
+# fitted parabola's end slopes overshoot the tangent grades. So each
+# curve's geometry is then fitted as a designer draws a profile: straight
+# grades between VPIs, each VPI rounded by a symmetric parabolic curve of
+# length L. For given VPI positions and lengths the profile is linear in
+# the VPI elevations, which come from least squares; each VPI's position
+# and length are then searched (V_FIT_SWEEPS passes) with the others held,
+# curves kept from overlapping. The fit is made to the repaired profile
+# (DEM with structure spans, not smoothed), so the smoothing does not
+# stretch the curves. Grades, VPI, length and K of a curve all come from the
+# one fitted profile, so A = G2 - G1 and K = L / |A| agree.
+V_FIT_MIN_LENGTH_FT = 50.0     # shortest fitted curve
+V_FIT_SWEEPS = 3               # passes over the VPIs
+V_FIT_START_TURN_FRACTION = 0.6  # starting length: see _vertical_start_length
+V_FIT_START_HEIGHT_FRACTION = 0.5
+
+
+def _vertical_start_length(z_smooth: np.ndarray, spacing_m: float, s: int, e: int) -> float:
+    """Starting length (m) for a curve's fit: the vertical analogue of the
+    horizontal half-height ends. The central rate of grade change is the
+    change over the shortest stretch of the run s-e carrying
+    V_FIT_START_TURN_FRACTION of the run's change, divided by its length; the
+    curve is taken between the first and last points of the run where the
+    rate reaches V_FIT_START_HEIGHT_FRACTION of that."""
+    g = np.gradient(z_smooth, spacing_m)
+    r = np.abs(np.gradient(g, spacing_m))
+    seg = g[s:e + 1]
+    if len(seg) < 3:
+        return max((e - s) * spacing_m, spacing_m)
+    turn = np.maximum.accumulate(np.abs(seg - seg[0]))
+    need = V_FIT_START_TURN_FRACTION * turn[-1]
+    if need <= 1e-12:
+        return (e - s) * spacing_m
+    ends = np.searchsorted(turn, turn + need - 1e-15, side="left")
+    ok = ends < len(turn)
+    if not ok.any():
+        return (e - s) * spacing_m
+    pts = int(np.min(ends[ok] - np.flatnonzero(ok)))
+    rate = need / max(pts * spacing_m, spacing_m)
+    hit = np.flatnonzero(r[s:e + 1] >= V_FIT_START_HEIGHT_FRACTION * rate)
+    if not hit.size:
+        return (e - s) * spacing_m
+    return max((hit[-1] - hit[0]) * spacing_m, spacing_m)
+
+
+def _profile_rows(x: np.ndarray, xn: np.ndarray, L: np.ndarray):
+    """Design-profile weights: for each position x, three node indices and
+    weights such that elevation = sum(w * z_node). xn are the node positions
+    (the two ends and the VPIs, increasing); L the curve length at each node
+    (0 at the ends). Curves must not overlap."""
+    n = len(xn)
+    k = np.clip(np.searchsorted(xn, x, side="right") - 1, 0, n - 2)
+    d = np.diff(xn)
+    t = (x - xn[k]) / d[k]
+    idx = np.stack([k, k + 1, np.minimum(k + 1, n - 1)], axis=1)
+    w = np.stack([1.0 - t, t, np.zeros_like(t)], axis=1)
+    # inside a curve at node i (i = k or k + 1): back tangent plus the
+    # parabolic offset, in terms of z[i-1], z[i], z[i+1]
+    for side in (0, 1):
+        i = k + side
+        inner = (i > 0) & (i < n - 1)
+        Li = np.where(inner, L[np.clip(i, 0, n - 1)], 0.0)
+        xi = xn[np.clip(i, 0, n - 1)]
+        m = inner & (Li > 0) & (np.abs(x - xi) < Li / 2)
+        if not m.any():
+            continue
+        im = i[m]
+        d0, d1 = d[im - 1], d[im]
+        u = x[m] - xi[m]
+        q = (u + Li[m] / 2) ** 2 / (2 * Li[m])
+        idx[m] = np.stack([im - 1, im, im + 1], axis=1)
+        w[m] = np.stack([-u / d0 + q / d0, 1 + u / d0 - q / d1 - q / d0, q / d1], axis=1)
+    return idx, w
+
+
+def _solve_nodes(x, z, xn, L):
+    """VPI and end elevations by least squares for given positions and lengths."""
+    idx, w = _profile_rows(x, xn, L)
+    n = len(xn)
+    A = np.zeros((n, n))
+    b = np.zeros(n)
+    for a_ in range(3):
+        np.add.at(b, idx[:, a_], w[:, a_] * z)
+        for c_ in range(3):
+            np.add.at(A, (idx[:, a_], idx[:, c_]), w[:, a_] * w[:, c_])
+    return np.linalg.lstsq(A + 1e-9 * np.eye(n), b, rcond=None)[0]
+
+
+def _fit_ok(xn, L, i) -> bool:
+    """Curve i stays between its neighbours' curves."""
+    return (xn[i - 1] + L[i - 1] / 2 <= xn[i] - L[i] / 2) and (xn[i] + L[i] / 2 <= xn[i + 1] - L[i + 1] / 2)
+
+
+def _fit_node(x, z, spacing_m, xn, L, zn, i, Lmin, x_lo_i, x_hi_i, L_max_i):
+    """Searches node i's position and length with the other nodes held:
+    the profile between the end of curve i-2 and the start of curve i+2
+    depends only on nodes i-2 to i+2, so only that stretch is refitted (the
+    elevations of nodes i-1 to i+1, with i-2 and i+2 held). The VPI stays
+    between x_lo_i and x_hi_i and the length at most L_max_i (the run the
+    curve was found on)."""
+    n = len(xn)
+    lo_node, hi_node = max(0, i - 2), min(n - 1, i + 2)
+    x_lo = xn[lo_node] + (L[lo_node] / 2 if lo_node > 0 else 0.0)
+    x_hi = xn[hi_node] - (L[hi_node] / 2 if hi_node < n - 1 else 0.0)
+    a = max(0, int(np.ceil((x_lo - x[0]) / spacing_m)))
+    b = min(len(x), int(np.floor((x_hi - x[0]) / spacing_m)) + 1)
+    if b - a < 5:
+        return
+    xs, zs = x[a:b], z[a:b]
+    free = [j for j in range(max(0, i - 1), min(n - 1, i + 1) + 1)]
+    held = [j for j in (i - 2, i + 2) if 0 <= j < n]
+
+    def rss(p):
+        xt, Lt = xn.copy(), L.copy()
+        xt[i], Lt[i] = p[0], max(Lmin, float(np.exp(p[1])))
+        if not (x_lo_i <= xt[i] <= x_hi_i) or Lt[i] > L_max_i:
+            return 1e30, None
+        if not (xt[i - 1] < xt[i] < xt[i + 1]) or not _fit_ok(xt, Lt, i):
+            return 1e30, None
+        idx, w = _profile_rows(xs, xt, Lt)
+        rhs = zs.copy()
+        for j in held:
+            rhs -= (w * (idx == j)).sum(axis=1) * zn[j]
+        M = np.stack([(w * (idx == j)).sum(axis=1) for j in free], axis=1)
+        sol, *_ = np.linalg.lstsq(M, rhs, rcond=None)
+        return float(np.sum((M @ sol - rhs) ** 2)), sol
+
+    # Pattern search: moves the VPI by +-dx and scales the length by f,
+    # keeping any improvement, halving the steps when neither helps.
+    cur = (xn[i], L[i])
+    best, sol_best = rss(np.array([cur[0], np.log(cur[1])]))
+    if best >= 1e30:
+        return
+    dx, f = max(spacing_m, 0.25 * L[i]), 1.5
+    for _ in range(60):
+        moved = False
+        for cand in ((cur[0] + dx, cur[1]), (cur[0] - dx, cur[1]), (cur[0], cur[1] * f), (cur[0], max(Lmin, cur[1] / f))):
+            r, sol = rss(np.array([cand[0], np.log(cand[1])]))
+            if r < best - 1e-12:
+                best, sol_best, cur, moved = r, sol, cand, True
+                break
+        if not moved:
+            if dx <= spacing_m and f <= 1.02:
+                break
+            dx, f = max(spacing_m, dx / 2), 1 + (f - 1) / 2
+    xn[i], L[i] = cur
+    for j_, v_ in zip(free, sol_best):
+        zn[j_] = v_
+
+
+def fit_vertical_curves(curves: List[Dict], z_fit: np.ndarray, z_smooth: np.ndarray,
+                        spacing_m: float, params: Dict) -> List[Dict]:
+    """
+    Fits the vertical curves found by analyze_vertical_parabolic() as a
+    design profile (see the notes above). z_fit is the profile fitted to
+    (the repaired DEM profile), z_smooth the smoothed profile the curves
+    were found on (for the starting lengths). Every curve stays in the
+    fitted profile; those whose fitted grade change falls under
+    V_MIN_GRADE_CHANGE, or whose middle offset falls under V_MIN_OFFSET_FT,
+    are not reported.
+    Returns curve records as analyze_vertical_parabolic() does, with
+    Start_Dist / End_Dist at the PVC / PVT and Run_Start_Dist /
+    Run_End_Dist at the run the curve was found on.
+    """
+    if not curves:
+        return []
+    z = np.asarray(z_fit, dtype=float)
+    n_pts = len(z)
+    x = np.arange(n_pts) * spacing_m
+    Lmin = V_FIT_MIN_LENGTH_FT / FEET_PER_METER
+    cs = sorted(curves, key=lambda c: c["VPI_Dist"])
+    runs = [(c["Start_Dist"], c["End_Dist"]) for c in cs]
+    xn = np.r_[x[0], [c["VPI_Dist"] for c in cs], x[-1]].astype(float)
+    L = np.r_[0.0, [max(Lmin, _vertical_start_length(z_smooth, spacing_m,
+                                                    int(round(c["Start_Dist"] / spacing_m)),
+                                                    int(round(c["End_Dist"] / spacing_m)))) for c in cs], 0.0]
+    # VPIs inside the profile, increasing, with room for each curve.
+    for i in range(1, len(xn) - 1):
+        xn[i] = min(max(xn[i], x[0] + spacing_m), x[-1] - spacing_m)
+    order_ok = np.all(np.diff(xn) > 0)
+    if not order_ok:
+        return curves
+    for i in range(1, len(xn) - 1):
+        room = 2 * min(xn[i] - (xn[i - 1] + L[i - 1] / 2 if i > 1 else xn[0]),
+                       (xn[i + 1] - L[i + 1] / 2 if i < len(xn) - 2 else xn[-1]) - xn[i])
+        L[i] = max(Lmin, min(L[i], room - 1e-6))
+        if not _fit_ok(xn, L, i):
+            L[i] = Lmin
+    # Each VPI stays within the run its curve was found on, and no curve is
+    # longer than that run: the run is where the profile bends.
+    x_lo = np.r_[x[0], [r[0] for r in runs], x[-1]]
+    x_hi = np.r_[x[0], [r[1] for r in runs], x[-1]]
+    L_max = np.r_[0.0, [max(Lmin, r[1] - r[0]) for r in runs], 0.0]
+    for i in range(1, len(xn) - 1):
+        xn[i] = min(max(xn[i], x_lo[i]), x_hi[i])
+        L[i] = min(L[i], L_max[i])
+    min_A = float(params.get("V_MIN_GRADE_CHANGE", 0.5)) / 100.0
+    min_E_m = float(params.get("V_MIN_OFFSET_FT", 0.10)) / FEET_PER_METER
+    zn = _solve_nodes(x, z, xn, L)
+    for _ in range(V_FIT_SWEEPS):
+        for i in range(1, len(xn) - 1):
+            if _fit_ok(xn, L, i):
+                _fit_node(x, z, spacing_m, xn, L, zn, i, Lmin, x_lo[i], x_hi[i], L_max[i])
+    zn = _solve_nodes(x, z, xn, L)
+    g = np.diff(zn) / np.diff(xn)
+    out = []
+    for j in range(1, len(xn) - 1):
+        g1, g2 = g[j - 1] * 100.0, g[j] * 100.0
+        A_pct = g2 - g1
+        length = float(L[j])
+        # Every curve stays in the fitted profile; those that come out too
+        # slight are not reported, as in analyze_vertical_parabolic().
+        if abs(A_pct) / 100.0 < min_A or abs(A_pct) / 100.0 * length / 8.0 < min_E_m:
+            continue
+        length_ft = length * FEET_PER_METER
+        vtype = "CREST" if A_pct < 0 else "SAG"
+        ssd = sight_distance_provided(length_ft, A_pct, vtype)
+        speed = design_speed_supported(ssd)
+        out.append({
+            'Start_Dist': float(xn[j] - length / 2),
+            'End_Dist': float(xn[j] + length / 2),
+            'Run_Start_Dist': float(runs[j - 1][0]),
+            'Run_End_Dist': float(runs[j - 1][1]),
+            'Length_m': length,
+            'Length_ft': length_ft,
+            'Grade_In': g1,
+            'Grade_Out': g2,
+            'Alg_Diff': A_pct,
+            'K_Value': length_ft / abs(A_pct),
+            'Type': vtype,
+            'E': abs(A_pct) * length / 800.0,
+            'VPI_Dist': float(xn[j]),
+            'VPI_Elev_Ft': float(zn[j]) * FEET_PER_METER,
+            'SSD_Provided_Ft': round(ssd) if np.isfinite(ssd) else np.nan,
+            'Design_Speed_Supported_Mph': speed,
+            'VC_Class': vertical_curve_class(speed),
+        })
+    return out
 
 # -------------------------
 # Shared route processing
@@ -5158,6 +5416,9 @@ def smooth_plan_profile_from_linestring(
         "coords_m_raw": list(zip(x_raw, y_raw)),
         "coords_wgs_raw": [rev.transform(x, y) for x, y in zip(x_raw, y_raw)],
         "z_raw": z_filled,
+        # The profile the vertical spline is fitted to (DEM with structure
+        # spans repaired and lidar decks); vertical curves are fitted to it.
+        "z_fixed": z_fixed,
         "elev_missing_frac": elev_missing_frac,
         "structure_tier": structure_tier_out,
         "structure_kind": structure_kind_out,
