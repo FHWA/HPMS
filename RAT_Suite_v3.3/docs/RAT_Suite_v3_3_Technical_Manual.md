@@ -2,7 +2,7 @@
 ## Technical Manual
 
 *Federal Highway Administration, Office of Highway Policy Information*
-*November 6, 2026*
+*November 24, 2026*
 
 ---
 
@@ -94,14 +94,11 @@ The use of this tool does not constitute a federal mandate, regulation, or forma
   - 8.3 Records That Cannot Be Smoothed
   - 8.4 Replacing the HPMS Curve and Grade Fields
   - 8.5 Outputs
-- Chapter 9: Calibration
-  - 9.1 What the Calibration Looks For
-  - 9.2 Sample Size
-  - 9.3 Stability Search
-  - 9.4 Fidelity Limit
-  - 9.5 Repeats and Final Values
-  - 9.6 The National Vertical Factor
-  - 9.7 Route Cross-Check in the Plan and Profile Tool
+- Chapter 9: Choosing the Smoothing Factors
+  - 9.1 The Horizontal Factor
+  - 9.2 Effect on Other Roads
+  - 9.3 The National Vertical Factor
+  - 9.4 Earlier Factors by State and Functional Class
 - Chapter 10: Outputs
   - 10.1 File Names
   - 10.2 Curve and Grade Segment Tables
@@ -124,9 +121,8 @@ The use of this tool does not constitute a federal mandate, regulation, or forma
   - A.3 The Parabolic Vertical Curve
   - A.4 Stopping Sight Distance on Vertical Curves
   - A.5 The Viterbi Labeling
-  - A.6 Sample Size
 - Appendix B: Default Parameters
-- Appendix C: National Horizontal Smoothing Factors
+- Appendix C: Smoothing Factor Tests Against As-Built Plans
 - Appendix D: Output Columns
   - D.1 Horizontal Curve Table
   - D.2 Vertical Curve Table
@@ -139,7 +135,6 @@ The use of this tool does not constitute a federal mandate, regulation, or forma
   - D.9 Crossings GeoPackage (Alignment)
   - D.10 Route Ordering Audit (Alignment)
   - D.11 4D Output
-  - D.12 Calibration Audit
 - Appendix E: File Structure
 - Appendix F: Glossary
 - Appendix G: References
@@ -153,18 +148,18 @@ The use of this tool does not constitute a federal mandate, regulation, or forma
 - Table 1-5. Outputs by tool
 - Table 2-1. HPMS fields used by RAT
 - Table 3-1. RMS departure of the smoothed line by smoothing factor
-- Table 3-2. National default horizontal smoothing factors
-- Table 3-3. Source of the smoothing factors in a run
 - Table 5-1. Stopping sight distance on level roadway (AASHTO Green Book, Table 3-1)
 - Table 5-2. Vertical curve classes
-- Table 9-1. Smoothing factors tested (`VITERBI_S_GRID`)
+- Table 9-1. RAT curves against as-built plans by horizontal smoothing factor (all plan sets)
 - Table 9-2. Vertical curves per mile by vertical smoothing factor
 - Table 11-1. Validator checks
 - Table B-1. Processing parameters
 - Table B-2. Fixed values
 - Table B-3. Cross-section values (`core/rat_cross_section.py`)
-- Table B-4. Calibration settings (`tools/rat_national_calibration.py`)
-- Table C-1. Horizontal smoothing factors by State and functional class
+- Table B-4. Lidar values (`core/rat_lidar.py`)
+- Table C-1. As-built plan sets
+- Table C-2. Median RAT curve length / plan length, by plan set and horizontal smoothing factor (curves matched)
+- Table C-3. Median distance of the RAT PC / PT from the plan PC / PT (ft), by plan set and horizontal smoothing factor
 
 ## List of Figures
 
@@ -180,9 +175,9 @@ The use of this tool does not constitute a federal mandate, regulation, or forma
 | AASHTO | American Association of State Highway and Transportation Officials |
 | ARNOLD | All Road Network of Linear Referenced Data |
 | CC0 | Creative Commons Zero (public domain dedication) |
-| CS | Curve-to-spiral point |
 | DEM | Digital elevation model |
 | DOT | Department of Transportation |
+| EPT | Entwine Point Tiles (the format of the Amazon copy of 3DEP lidar) |
 | EPSG | European Petroleum Survey Group (coordinate system codes) |
 | FHWA | Federal Highway Administration |
 | FIPS | Federal Information Processing Standards (State codes) |
@@ -192,18 +187,22 @@ The use of this tool does not constitute a federal mandate, regulation, or forma
 | HMM | Hidden Markov model |
 | HPMS | Highway Performance Monitoring System |
 | IRI | International Roughness Index |
+| LAZ | Compressed lidar point file format |
 | MP | Milepost |
 | NBI | National Bridge Inventory |
 | NC | Normal crown |
 | NTI | National Tunnel Inventory |
+| PC | Point of curvature (start of a horizontal curve) |
+| PI | Point of intersection |
+| PT | Point of tangency (end of a horizontal curve) |
 | PVC | Point of vertical curvature |
 | PVT | Point of vertical tangency |
 | RAT | Roadway Alignment Tool |
 | RMS | Root mean square |
 | RMSE | Root mean square error |
 | RP | Reference point |
-| SC | Spiral-to-curve point |
 | SSD | Stopping sight distance |
+| TNM | The National Map (USGS) |
 | USGS | U.S. Geological Survey |
 | UTM | Universal Transverse Mercator |
 | VPI | Vertical point of intersection |
@@ -251,7 +250,7 @@ RAT results are estimates derived from mapped geometry and a bare-earth elevatio
 
 ### 1.2 What the Suite Produces
 
-The suite has four processing tools, a calibration tool, and a validator. A graphical user interface (GUI), the Unified GUI, sets up and runs the processing tools. Table 1-2 lists them.
+The suite has four processing tools and a validator. A graphical user interface (GUI), the Unified GUI, sets up and runs the processing tools. Table 1-2 lists them.
 
 **Table 1-2. RAT Suite tools**
 
@@ -261,7 +260,6 @@ The suite has four processing tools, a calibration tool, and a validator. A grap
 | Alignment | `apps/rat_alignment_cli.py` | One State or all States | Finds and classifies every horizontal and vertical curve and every grade segment |
 | Plan and Profile | `apps/rat_plan_profile_cli.py`, `apps/rat_plan_profile_report_pdf.py` | One route, optionally between two reference points | Detailed tables, cross sections, and engineering-style sheets |
 | 4D Enrichment | `apps/hpms_4d_enricher_cli.py` | One State or all States | HPMS line work with elevation (Z) and reference point (M) on every vertex |
-| Calibration | `tools/rat_national_calibration.py` | One State or All States | Sets the horizontal smoothing factor for each State and functional class |
 | Validator | `tools/rat_results_validator.py` | Output files | Checks the output files for missing fields and impossible values |
 
 The tools in Table 1-2 rely on the shared modules in Table 1-3. These hold the processing that two or more tools use, so each method is written once. Most of the methods described in this manual are in `core/rat_core.py`.
@@ -271,11 +269,11 @@ The tools in Table 1-2 rely on the shared modules in Table 1-3. These hold the p
 | Module | Used by | Purpose | Section |
 | :--- | :--- | :--- | :--- |
 | `core/rat_core.py` | All tools | Data loading, continuity chunks, DEM tiles, smoothing, bridge and tunnel repair, curve and grade detection, sight distance, smoothing factors | Chapters 2 to 5 |
+| `core/rat_lidar.py` | Alignment, Plan and Profile | 3DEP lidar download and bridge deck elevations | 5.2.11 |
 | `core/rat_cross_section.py` | Plan and Profile, 4D Enrichment | Cross sections, measured superelevation, nearby lines, over/under labels; DEM sampling for the 4D fallback | Chapters 6, 7, 8 |
 | `core/rat_structure_report.py` | Alignment, Plan and Profile | Bridge and tunnel span list and span report PDF | 10.6 |
 | `core/rat_dem_relief.py` | Plan and Profile PDF, span report | Shaded relief from the cached DEM tiles | 10.6, 10.10 |
 | `core/rat_param_summary.py` | Alignment, Plan and Profile | Run-parameter panels on the maps and dashboards and the PDF cover page | 10.7, 10.10 |
-| `core/national_smoothing_factors.json` | All tools | Horizontal smoothing factors by State and functional class | 3.5, Appendix C |
 
 Table 1-4 lists the helper scripts. The scripts in `tools/` are run by hand, from the suite folder, after editing the CONFIGURATION block at the top of each. The two batch files are for Windows.
 
@@ -283,8 +281,6 @@ Table 1-4 lists the helper scripts. The scripts in `tools/` are run by hand, fro
 
 | Script | Used with | Purpose | Section |
 | :--- | :--- | :--- | :--- |
-| `tools/pull_national_curve_distribution.py` | Calibration | HPMS curve class shares used to size the calibration samples; run once per HPMS release | 9.2 |
-| `tools/rat_calibration_diagnostics.py` | Calibration | Charts and checks of the calibration audit table | 9.5 |
 | `tools/rat_structure_span_check.py` | Plan and Profile | Runs the bridge and tunnel detection again on existing plan and profile vertex tables, to try other settings without downloading data | 5.2 |
 | `Run_RAT_Suite.bat` | Unified GUI | Starts the Unified GUI | |
 | `NBI/download_nbi.bat` | All tools | Downloads the NBI and NTI files into the `NBI` folder | 2.6 |
@@ -309,7 +305,6 @@ The alignment and plan and profile tools share most of their processing, so they
 | Statewide summary dashboard (HTML) | Yes | | |
 | Run parameters (JSON) | | Yes | |
 | Corridor analytics dashboard (HTML) | | Yes | |
-| Calibration cross-check for the route (HTML) | | Yes | |
 | Cross-section station table and ground profiles (CSV) | | Yes | |
 | Nearby HPMS lines (CSV) | | Yes | |
 | Bridge and tunnel span report (PDF, optional) | | Yes | |
@@ -320,7 +315,7 @@ The alignment and plan and profile tools share most of their processing, so they
 
 The UTM Shapefile is written only by the 4D enrichment tool. Its coordinates are in meters in the local Universal Transverse Mercator (UTM) zone rather than in longitude and latitude. That lets 3D software such as Blender show the road network with true horizontal and vertical scale, which is a simple way to show people what the elevation data looks like.
 
-The 4D enrichment tool can also replace the HPMS curve and grade fields (`CURVES_A` through `CURVES_F`, `GRADES_A` through `GRADES_F`) with values from an alignment run. It splits each section's length among the classes using the alignment run's horizontal curve table and grade segment table, so the class lengths add up to the section length, as HPMS requires. The validator writes a text report (`qa_validation_report_<state>_<date>_v<n>.txt`) beside the files it checked. The GUI saves everything shown in its Run Log to `Run_Log_<state>_<date>_v<n>.txt`. The calibration tool writes the national smoothing factor file (`core/national_smoothing_factors.json`), an audit table of every sample it ran, and a run log.
+The 4D enrichment tool can also replace the HPMS curve and grade fields (`CURVES_A` through `CURVES_F`, `GRADES_A` through `GRADES_F`) with values from an alignment run. It splits each section's length among the classes using the alignment run's horizontal curve table and grade segment table, so the class lengths add up to the section length, as HPMS requires. The validator writes a text report (`qa_validation_report_<state>_<date>_v<n>.txt`) beside the files it checked. The GUI saves everything shown in its Run Log to `Run_Log_<state>_<date>_v<n>.txt`.
 
 ### 1.3 The Documentation Set
 
@@ -334,11 +329,12 @@ The suite comes with the following documents:
 
 ### 1.4 Data Basis
 
-RAT uses three sources of data. Chapter 2 describes each one.
+RAT uses four sources of data. Chapter 2 describes the first three, and Section 5.2.11 the fourth.
 
 1. **HPMS route geometry.** The State's HPMS records with their line geometry, downloaded from the U.S. Department of Transportation (U.S. DOT) data portal or read from a local file. Each record carries all HPMS data items including a route identifier, begin and end reference points, functional system, facility type, and structure type.
 2. **USGS 3DEP elevation.** Bare-earth elevation from the 3DEP elevation service, requested at a grid spacing of about 1 meter.
-3. **National Bridge Inventory (NBI) and National Tunnel Inventory (NTI).** Point locations of bridges and tunnels. These are optional. RAT finds bridges and tunnels in the elevation data on its own and uses these inventories only to label them.
+3. **National Bridge Inventory (NBI) and National Tunnel Inventory (NTI).** Point locations of bridges and tunnels. These are optional. RAT finds bridges and tunnels in the elevation data on its own and uses these inventories to label them and to confirm spans the elevation data alone leaves in doubt.
+4. **USGS 3DEP lidar point clouds.** The lidar points around each bridge 300 feet or longer, used to measure the bridge deck that the bare-earth DEM leaves out. This is on by default and can be turned off; without network access to the lidar sources, bridges keep a straight line between their abutments.
 
 ### 1.5 Units and Reference Points
 
@@ -358,7 +354,7 @@ Unless an equation says otherwise, lengths in this manual are in meters.
 
 HPMS locates each record along its route by a begin point and an end point. These are reference points (RPs): measured positions along the route in miles from the route's origin. They are not necessarily the mileposts posted along the road. The scripts and their output columns use the terms "milepost" and "MP" (for example `Milepost`, `Start_MP`, `Calibrated_Start_MP`). The column names are kept as they are in the code, but this manual calls these values reference points.
 
-A value marked "default", such as `H_MIN_CURVE_LENGTH_FT` (default 100 feet), is a setting the user can change. Those marked "GUI" in Table B-1 are changed in the Unified GUI (main window or Advanced Settings), and the others in the DEFAULTS or CONFIGURATION block of the script named in Tables B-1 and B-4. Values given without "default" are set in the code and are not meant to be changed (Tables B-2 and B-3).
+A value marked "default", such as `H_MIN_CURVE_LENGTH_FT` (default 100 feet), is a setting the user can change. Those marked "GUI" in Table B-1 are changed in the Unified GUI (main window or Advanced Settings), and the others in the DEFAULTS or CONFIGURATION block of the script named in Table B-1. Values given without "default" are set in the code and are not meant to be changed (Tables B-2 to B-4).
 
 ### 1.6 How a Route Is Processed
 
@@ -368,7 +364,7 @@ The alignment tool processes a State one route at a time. For each route it:
 2. Projects each chunk to UTM and adds points along it at an even spacing (default 5 feet; Chapter 3).
 3. Fits a smoothing spline to the horizontal line (Chapter 3).
 4. Reads the ground elevation under each point from the 1-meter DEM (Chapter 2).
-5. Finds bridge and tunnel spans in the elevation profile and replaces each one with a straight line between its ends (Chapter 5).
+5. Finds bridge and tunnel spans in the elevation profile and replaces each one with a straight line between its ends, then replaces the line across each bridge 300 feet or longer with the deck measured from lidar where lidar is available (Chapter 5).
 6. Fits a smoothing spline to the repaired profile (Chapters 3 and 5).
 7. Finds horizontal curves from the curvature of the smoothed line and vertical curves from the rate of change of grade on the smoothed profile, then measures and classifies each curve (Chapters 4 and 5).
 8. Divides the profile into grade segments at the vertical points of intersection (VPIs) of the vertical curves, and classes each segment by its grade (Chapter 5).
@@ -388,10 +384,10 @@ The plan and profile tool follows the same steps for a single route and then add
 - **Chapter 6, Cross Sections and Measured Superelevation**, covers the plan and profile tool's cross sections.
 - **Chapter 7, Crossings**, covers the network crossing map and the over/under labels.
 - **Chapter 8, 4D Enrichment**, covers how elevation is assigned to the original HPMS vertices.
-- **Chapter 9, Calibration**, covers how the horizontal smoothing factors were set and how the national vertical factor was chosen.
+- **Chapter 9, Choosing the Smoothing Factors**, covers how the national horizontal and vertical smoothing factors were chosen.
 - **Chapter 10, Outputs**, describes each output file.
 - **Chapter 11, Validation and Known Limitations**, describes the validator's checks and, separately, the known limits of the methods.
-- **Appendices** give derivations, default parameters, the national horizontal smoothing factors, the column dictionary, the file structure, a glossary, and references.
+- **Appendices** give derivations, default parameters, the results of the smoothing factor tests against as-built plans, the column dictionary, the file structure, a glossary, and references.
 
 ---
 
@@ -427,13 +423,9 @@ flowchart TD
     NBI[("NBI / NTI files")] --> AL
     NBI --> PP
     NBI --> E4
-    CAL["Calibration tool<br/>(run separately)"] --> NSF[("national_smoothing_factors.json")]
-    NSF --> AL
-    NSF --> PP
-    NSF --> E4
+    LID[("3DEP lidar<br/>(bridge decks)")] --> AL
+    LID --> PP
 ```
-
-The calibration tool is not run from the GUI. It is run on its own when the HPMS data changes, and it writes the national smoothing factor file that the other tools read (Chapter 9).
 
 ### 2.2 HPMS Route Geometry
 
@@ -453,7 +445,7 @@ The scripts rename the source fields to a common set of names, listed in Table 2
 | `route_id` | `RouteId` | Groups records into routes |
 | `begin_point` | `Start_MP` | Begin reference point of the record (miles) |
 | `end_point` | `End_MP` | End reference point of the record (miles) |
-| `f_system` | `FSystem` | Functional system (functional classes 1 = Interstate through 7 = Local); selects the horizontal smoothing factor. Records with no value are processed only when selected, as class 7 (Section 2.2.1) |
+| `f_system` | `FSystem` | Functional system (functional classes 1 = Interstate through 7 = Local); selects the records processed and sets the default reference speed of a curve or grade whose record has no speed limit (Section 5.6.3). Records with no value are processed only when selected, as class 7 (Section 2.2.1) |
 | `facility_type` | `Facility_Type` | Selects which records are processed. Records with no value are processed only when selected, as type 2 (Section 2.2.1) |
 | `structure_type` | `Structure_Type` | Labels bridge (1) and tunnel (2) records |
 | `shapeid` | `ShapeId` | Order in which the State submitted the geometry |
@@ -611,7 +603,7 @@ where:
 | $MM$	| minutes |
 | $SS.ss$	| seconds, to hundredths |
 
-Only the main record of each structure (Item 5A = 1) is read. The other records of a structure repeat its location and give no length.
+Only the main record of each structure (Item 5A = 1) is read. The other records of a structure repeat its location and give no length. Item 39 (navigation vertical clearance, in meters) is also read where Item 38 (navigation control) is 1, for the clearance floor of a bridge deck over water (Section 5.2.11).
 
 - **Tunnels (NTI).** Items G.1 (tunnel length, in feet), I.13 (latitude), and I.14 (longitude), already in decimal degrees.
 
@@ -633,11 +625,13 @@ $$
 - **4D enrichment.** The work is split the same way as in the alignment tool, one task per continuity chunk or piece, so each route is smoothed once. A second set of tasks, one per route, then assigns elevations to the route's HPMS records from the route's whole profile (Chapter 8).
 - **Plan and profile.** One route is processed in a single process.
 
+The worker processes of a run share the lidar cache used for bridge decks. A file one worker is downloading is waited for by the others, and requests to the lidar servers are spaced across all of them (Section 5.2.11).
+
 ---
 
 ## Chapter 3: Geometry Preparation and Smoothing
 
-Each continuity chunk is resampled at evenly spaced points, and then smoothing splines are fitted to it: one through the horizontal line and one through the elevation profile. Curves, grades, and everything else measured later come from these smoothed lines. This chapter covers the point spacing, the spline, the smoothing factors that control how closely the spline follows the data, and where the suite gets those factors for a run.
+Each continuity chunk is resampled at evenly spaced points, and then smoothing splines are fitted to it: one through the horizontal line and one through the elevation profile. Curves, grades, and everything else measured later come from these smoothed lines. This chapter covers the point spacing, the spline, the smoothing factors that control how closely the spline follows the data, and where a run gets those factors.
 
 ### 3.1 Why the Geometry Must Be Smoothed
 
@@ -723,13 +717,13 @@ where:
 | Symbol	| Meaning |
 | :--- | :--- |
 | $s$	| smoothing condition (m²), Eq. 3.4 |
-| $F$	| smoothing factor (m²): H_SMOOTH_FACTOR and its functional class variants, or V_SMOOTH_FACTOR |
+| $F$	| smoothing factor (m²): H_SMOOTH_FACTOR or V_SMOOTH_FACTOR |
 | $N$	| number of densified points in the chunk, Eq. 3.1 |
 | $N_{\text{ref}}$	| number of 10-foot intervals in one mile, 528 (SMOOTH_REF_POINTS) |
 | 1,609.344	| meters per mile (Eq. 1.2) |
 | 3.28084	| feet per meter (Eq. 1.1) |
 
-Because $s$ is a sum of squared departures in meters and $N/N_{\text{ref}}$ is a ratio of point counts, the factor $F$ is in square meters. Its square root divided by $\sqrt{528}$ is therefore a distance in meters (Eqs. 3.7 and 3.8). The factors were calibrated on one-mile chunks densified at 10 feet (Chapter 9). On those chunks $N \approx N_{\text{ref}}$, so $s = F$. Eq. 3.5 carries the calibrated factors over to chunks of any length and spacing.
+Because $s$ is a sum of squared departures in meters and $N/N_{\text{ref}}$ is a ratio of point counts, the factor $F$ is in square meters. Its square root divided by $\sqrt{528}$ is therefore a distance in meters (Eqs. 3.7 and 3.8). On a one-mile chunk densified at 10 feet, $N \approx N_{\text{ref}}$, so $s = F$. Eq. 3.5 carries a factor over to chunks of any length and spacing.
 
 #### 3.3.2 What the Factor Means on the Ground
 
@@ -755,7 +749,7 @@ where:
 | $\text{RMS}_{\text{plan}}$	| root mean square distance in plan between the smoothed line and the densified line (m) |
 | $f_i$, $g(d_i)$	| data value and spline value at point $i$ (m), Eq. 3.4 |
 
-Table 3-1 gives the RMS departure for factors that are common in the national factor file.
+Table 3-1 gives the RMS departure for a range of factors. The national horizontal factor is 30 (Section 3.5.1).
 
 **Table 3-1. RMS departure of the smoothed line by smoothing factor**
 
@@ -770,13 +764,13 @@ Table 3-1 gives the RMS departure for factors that are common in the national fa
 
 For the vertical profile, only the "each coordinate" column applies. The national vertical factor of 10 holds the smoothed profile to about 0.45 feet RMS from the DEM.
 
-These are averages over the chunk. Departures are larger where the spline cuts inside a sharp curve or across a short bump, and smaller on long tangents and uniform grades. Calibration limits the larger departures as well: the horizontal factor is held to the value at which the 99th percentile departure at curve points is no more than 6 feet, which is half of a 12-foot lane (Chapter 9).
+These are averages over the chunk. Departures are larger where the spline cuts inside a sharp curve or across a short bump, and smaller on long tangents and uniform grades.
 
 ### 3.4 Smoothing the Horizontal Line and the Profile
 
 #### 3.4.1 Horizontal Line
 
-The horizontal line is smoothed as two separate splines fitted against the same distance $d$: one for the easting, $x(d)$, and one for the northing, $y(d)$. Both use the same condition $s$, from the horizontal factor for the chunk's functional class (Section 3.5.1). All weights are 1. The smoothed position of point $i$ is $\bigl(x(d_i),\, y(d_i)\bigr)$.
+The horizontal line is smoothed as two separate splines fitted against the same distance $d$: one for the easting, $x(d)$, and one for the northing, $y(d)$. Both use the same condition $s$, from the national horizontal factor (Section 3.5.1). All weights are 1. The smoothed position of point $i$ is $\bigl(x(d_i),\, y(d_i)\bigr)$.
 
 Fitting $x$ and $y$ against distance, rather than fitting $y$ as a function of $x$, lets the line run in any direction, double back, or close on itself. The smoothed coordinates are converted back to longitude and latitude for output, and they are used to find horizontal curves (Chapter 4).
 
@@ -790,23 +784,15 @@ Grades, vertical curves, and sight distance come from the smoothed profile (Chap
 
 ### 3.5 Smoothing Factors
 
-#### 3.5.1 Horizontal Factors by State and Functional Class
+#### 3.5.1 National Horizontal Factor
 
-Each State digitizes its own HPMS line work, with its own methods, sources, and spacing of points. The right amount of horizontal smoothing therefore differs from State to State. It also differs by functional class, because roads in different functional classes are built to different design standards. For these reasons RAT uses a separate horizontal factor for each State and functional class. The factors were set by the calibration tool (Chapter 9) and are stored in `core/national_smoothing_factors.json`. Appendix C lists them.
+One horizontal factor is used for every State and functional class: $F_H = 30$ (`H_SMOOTH_FACTOR`, default 30, from `NATIONAL_H_SMOOTH_FACTOR`). By Eq. 3.8 it holds the smoothed line to about 1.1 feet RMS from the HPMS line in plan.
 
-The parameter names are `H_SMOOTH_FACTOR` for functional class 1 and `H_SMOOTH_FACTOR_FS2` through `H_SMOOTH_FACTOR_FS7` for classes 2 through 7. Calibrated values range from 5 to 150.
+The value was chosen by comparing RAT's curves with the curves on as-built plans for six projects: a Federal Lands project on Oregon Route 140, a Federal Lands forest road in Idaho, and four Iowa Interstate projects. With curve ends set as in Section 4.4.2, RAT's curve lengths matched the plans' lengths from PC to PT best at factors of 30 and 50, among factors from 10 to 150; at 50 and above, short, flat curves on the Interstates came out too long, so 30 was adopted. Chapter 9 gives the details, and Appendix C the results.
 
-Where no State value is available, RAT uses the national default for the functional class (`NATIONAL_DEFAULTS`). Each national default is the lower median of the calibrated State values (the middle value, or the lower of the two middle values; Section 9.5, Table 3-2).
+Earlier versions used a separate horizontal factor for each State and functional class, from a national calibration (October 2026) that chose each factor for the stability of the curve classification. Those factors ran from 5 to 150. At the higher values, short, flat curves on Interstates came out up to two or three times their plan length. On a few winding forest and mountain roads where the calibrated factors were 75 to 150, the national factor of 30 finds more short curves and more pairs of curves in the same direction close together, some of them a single curve split where the HPMS line wavers (Section 11.6).
 
-**Table 3-2. National default horizontal smoothing factors**
-
-| Functional class | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
-| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Factor $F_H$ | 75 | 100 | 30 | 30 | 30 | 30 | 75 |
-
-Each continuity chunk is smoothed with one factor. It is the factor for the functional class that covers the most miles of the chunk, where the miles for each functional class are the sum of the record lengths (end reference point minus begin reference point) of the chunk's records in that class. If two functional classes are tied, the lower class number is used. When two chunks are joined because their ends are close (Section 2.3.3), the miles are added together and the choice is made again. The pieces of a long chunk that is split for parallel processing (Section 2.7) all use the chunk's factor. If none of a chunk's records has usable reference points, the route's most common functional class by number of records is used.
-
-A route that changes functional class therefore takes the right factor on each of its chunks. Within a chunk, a short stretch of a different functional class, such as an urban section of a mostly rural route, is smoothed with the chunk's factor. In a statewide run the Run Log gives the number of routes that span more than one functional class. Setting `LOG_FSYSTEM_DETAIL` (default False) to True lists the functional class chosen for each chunk of those routes; the plan and profile tool always lists them.
+Each chunk still records the functional class that covers the most miles of it (the sum of its records' lengths in each class; the lower class number if two are tied). That class sets the default reference speed of the chunk's curves and grades whose records have no speed limit (Section 5.6.3); it no longer affects the smoothing. In a statewide run the Run Log gives the number of routes that span more than one functional class. Setting `LOG_FSYSTEM_DETAIL` (default False) to True lists the class chosen for each chunk of those routes; the plan and profile tool always lists them.
 
 #### 3.5.2 National Vertical Factor
 
@@ -816,16 +802,7 @@ The value was chosen by counting vertical curves on test routes as the factor wa
 
 #### 3.5.3 Where a Run Gets Its Factors
 
-Table 3-3 shows where each tool gets its factors. In every case the vertical factor comes from the GUI field (default 10), because the factor file holds horizontal factors only.
-
-**Table 3-3. Source of the smoothing factors in a run**
-
-| Run | Horizontal factors | Vertical factor |
-| :--- | :--- | :--- |
-| All States | Each State's values from `national_smoothing_factors.json`. Where the file has no value for a State or functional class, the GUI value is used. For an All States run the GUI fills these fields with the national defaults (Table 3-2). | GUI field (default 10) |
-| One State (any tool) | The GUI fields. Entering a State FIPS code fills them with that State's values from the file, and with the national default (Table 3-2) for any functional class the State has no value for. The **Reload State Factors** button fills them again after they have been edited. | GUI field (default 10) |
-
-A user can change any factor in the GUI for a one-State run, for example to test the effect of more or less smoothing on a route. When the GUI opens with saved settings whose factors differ from the State's values in the file, it lists the differences and asks which to use. At the start of each run, the Run Log gives the horizontal factor used for each functional class, marked "state" (the State's calibrated value), "national" (the national default, used where the State has none) or "custom" (any other value), and the vertical factor. The values are also recorded in the run's `run_params.json` file and on the cover of the plan and profile report.
+Every tool takes both factors from the GUI fields (**H Smooth Factor**, default 30, and **V Smooth Factor**, default 10), for a one-State run and for an All States run alike. A user can change either for a run, for example to test the effect of more or less smoothing on a route. When the GUI opens with saved settings whose factors differ from the national values, as settings saved by earlier versions with factors by State and functional class do, it lists the differences and offers to use the national values. At the start of each run, the Run Log gives both factors, each marked "national" or "custom" (any other value). The values are also recorded in the run's `run_params.json` file and on the cover of the plan and profile report.
 
 ### 3.6 Checking the Smoothing
 
@@ -954,38 +931,40 @@ The best final state is the one with the lowest $\Phi_{N-1}$, and the labels are
 
 With $c_{sw} = 0$, Eq. 4.6 gives the same labels as testing each point against the threshold. With $c_{sw} > 0$, a change of state is made only where the evidence for it, summed over neighboring points, is larger than $c_{sw}$. A brief dip of curvature below the threshold in the middle of a curve no longer splits the curve, and a brief spike on a tangent no longer starts one.
 
-The simple threshold method can still be selected by setting `H_USE_HMM_CLASSIFICATION` to False. It marks a point as a curve point when $|\kappa_i| \ge \tau_H$ and joins consecutive curve points that turn the same way. On the test routes, at the production smoothing factors, the two methods found the same curves. The calibration tool always uses the Viterbi labeling (Chapter 9), so leaving it on keeps the processing consistent with the calibration.
+The simple threshold method can still be selected by setting `H_USE_HMM_CLASSIFICATION` to False. It marks a point as a curve point when $|\kappa_i| \ge \tau_H$ and joins consecutive curve points that turn the same way. On the test routes, at the production smoothing factors, the two methods found the same curves.
 
 The same decoder, with a different signal and threshold, labels vertical curves (Section 5.5).
 
 ### 4.3 From Labeled Runs to Curves
 
-Each run of consecutive points with the same curve state is a candidate curve. Each candidate is tested and measured as follows.
+Each run of consecutive points with the same curve state is a candidate curve. The run, from where the curvature rises above the threshold to where it falls back below it, is the curve's measured run; it begins before the curve's PC and ends after its PT (Section 4.4.2). Each candidate is tested and measured on its run as follows.
 
 1. **End trimming.** When `TRIM_CURVE_ENDPOINTS` (default True) is True, points at each end of the run whose curvature is below $1.05\,\tau_H$ are dropped, so the curve begins and ends where the curvature is clearly above the threshold.
-2. **Length.** The curve length is measured along the route:
+2. **Splitting at curvature dips.** Two curves that turn the same way with a short tangent between them can be labeled as one run: the smoothing rounds the tangent into a gentle curve, so the curvature dips between the two arcs without falling below $\tau_H$. Within each run, a stretch where $|\kappa_i|$ is no more than 0.35 times the smaller of the highest curvature before it and the highest curvature after it is taken as tangent, and the parts on either side become separate candidates. The deepest such dip is split first, and each part is split again the same way. A split is made only if both parts are at least `H_MIN_CURVE_LENGTH_FT` long and turn at least `H_MIN_DELTA`, so a spiral, a compound curve (curvature stepping from one radius to another without a dip) or a slight waver within one curve is not split. Where the smoothing has rounded a tangent so far that the curvature through it stays above that share of the arcs' curvature, the two curves stay joined (Section 11.6).
+3. **Length.** The curve length is measured along the route:
 
    $$
    L_c = (i_e - i_s)\,\Delta \qquad \text{(4.8)}
    $$
 
-   where $i_s$ and $i_e$ are the indexes of the first and last points of the trimmed run. A curve shorter than `H_MIN_CURVE_LENGTH_FT` (default 100 feet) is dropped.
-3. **Deflection angle.** The deflection angle is the change in heading from the start of the curve to its end:
+   where $i_s$ and $i_e$ are the indexes of the first and last points of the trimmed run. A curve whose run is shorter than `H_MIN_CURVE_LENGTH_FT` (default 100 feet) is dropped. The length reported is shorter, from PC to PT (Eq. 4.13).
+4. **Deflection angle.** The deflection angle is the change in heading from the start of the curve to its end:
 
    $$
    I_c = \left| \theta_{i_e} - \theta_{i_s} \right| \qquad \text{(4.9)}
    $$
 
    in degrees, from the unwrapped headings of Eq. 4.3. A curve that turns less than `H_MIN_DELTA` (default 3.5 degrees) is dropped.
-4. **Radius.** The reported radius is the smallest radius in the curve, at the point of greatest curvature:
+5. **Smallest radius.** The smallest radius in the curve is at the point of greatest curvature, $R_{\min} = 1/\max_{i_s \le i \le i_e} |\kappa_i|$ (`Min_Radius_m`). A curve whose smallest radius is larger than `H_MAX_RADIUS_FT` is dropped.
+6. **Radius.** The reported radius is the radius of the curve's main arc: the length of the shortest stretch of the curve that turns through 60 percent of its deflection angle, divided by that angle:
 
    $$
-   R = \frac{1}{\max_{i_s \le i \le i_e} |\kappa_i|} \qquad \text{(4.10)}
+   R = \frac{\Delta \cdot \min_{a} \left( b(a) - a \right)}{0.6\, I_c\, \pi / 180} \qquad \text{(4.10)}
    $$
 
-   A curve whose radius is larger than `H_MAX_RADIUS_FT` is dropped.
+   where $a$ runs over the points of the curve and $b(a)$ is the first point at which the heading has turned $0.6\,I_c$ from its value at $a$ (the turn taken as its running maximum along the curve, so turning back does not count).
 
-The smallest radius is used because it is the radius that governs the curve: on a curve with spirals, the circular arc in the middle is sharper than the spirals that lead into it. On a sharp corner, such as a right-angle turn at a street intersection, the curvature of the smoothed line peaks at the corner and the reported radius can be very small (Chapter 11).
+On a curve with spirals the curvature rises through the spiral, holds on the circular arc, and falls through the other spiral. The shortest stretch that carries 60 percent of the turn lies on the arc, so Eq. 4.10 gives the radius of the circular arc, which is the radius R shown on design plans; for a spiral-arc-spiral curve with 80-foot spirals and a 200-meter arc it gives 201 meters. The smallest radius, by contrast, is the peak of the smoothed line's curvature, which the smoothing makes sharper or flatter: on the Mt. Idaho Grade Road in Idaho (functional class 5), compared with the as-built plans, the median smallest radius was 0.84 of the plan radius at a horizontal smoothing factor of 75 and 0.63 at a factor of 10, while the arc radius was 1.07 and 0.97. The arc radius is never smaller than the smallest radius; on the test routes it was a median 1.23 times it (1.09 to 1.23 on Interstates). On a sharp corner, such as a right-angle turn at a street intersection, the smoothed line turns over a short distance and the radius can be very small (Chapter 11).
 
 ### 4.4 Curve Measurements and Classes
 
@@ -1003,13 +982,78 @@ where:
 | :--- | :--- |
 | $D$ | degree of curve (degrees per 100 ft) |
 | $R_{ft}$ | radius (ft) |
-| $R$ | radius (m), Eq. 4.10 |
+| $R$ | radius of the main arc (m), Eq. 4.10 |
 
 The curve class (`Bin`) is set from $D$ with the HPMS Item 43 thresholds in Table 1-1: A under 3.5, B from 3.5 to under 5.5, C from 5.5 to under 8.5, D from 8.5 to under 14.0, E from 14.0 to under 28.0, and F at 28.0 or more.
 
-#### 4.4.2 Simple Curves and Spirals
+#### 4.4.2 Curve Ends (PC and PT)
 
-RAT also reports whether a curve appears to have spiral transitions. The central circular part of the curve is taken as the stretch where the curvature is at least 85 percent of its peak value. Its first and last points are reported as the SC (spiral to curve) and CS (curve to spiral) points (`SC_Dist`, `CS_Dist`). If the curve begins more than 150 feet before the SC point, or ends more than 150 feet after the CS point, `Transition_Type` is "Spiral". Otherwise it is "Simple". This is a description of the shape of the smoothed curve, not a measurement of a designed spiral.
+On the smoothed line the curvature does not step from zero to the curve's curvature at the PC, as it does on a circular curve on design plans. The smoothing turns the step into a ramp, so the measured run of Section 4.3 starts where the ramp first rises above the threshold, before the PC, and ends after the PT. Measured that way, curves came out a median 1.35 times their plan length on the as-built plan sets of Chapter 9, at the national smoothing factor of 30.
+
+The ramp the smoothing makes at a PC is centered on it, so the curvature passes half the curve's curvature at the PC. RAT therefore takes the curve's ends at those points. Walking in from each end of the measured run, the PC is the first point and the PT the last point at which the curvature reaches half the curvature of the main arc:
+
+$$
+i_{PC} = \min\left\{ i : i_s \le i \le i_e,\ |\kappa_i| \ge \frac{f_{end}}{R} \right\}, \qquad
+i_{PT} = \max\left\{ i : i_s \le i \le i_e,\ |\kappa_i| \ge \frac{f_{end}}{R} \right\} \qquad \text{(4.12)}
+$$
+
+$$
+L = \left( i_{PT} - i_{PC} \right) \Delta \qquad \text{(4.13)}
+$$
+
+where:
+
+| Symbol | Meaning |
+| :--- | :--- |
+| $i_{PC}, i_{PT}$ | points at which the curve begins (PC) and ends (PT) |
+| $i_s, i_e$ | first and last points of the measured run (Section 4.3) |
+| $\kappa_i$ | curvature at point $i$ (1/m), Eq. 4.2 |
+| $f_{end}$ | share of the arc curvature at the curve's ends, 0.5 (`H_END_CURVATURE_FRACTION`) |
+| $R$ | radius of the main arc (m), Eq. 4.10 |
+| $L$ | curve length reported (m; `Length_m`, `Length_ft`) |
+| $\Delta$ | point spacing (m), Eq. 3.2 |
+
+If no point reaches $f_{end}/R$, the curve is the single point of greatest curvature. A curve whose length $L$ is less than `H_MIN_PCPT_LENGTH_FT` (default 25 feet) is dropped; the test is made in whole points, so a curve 25 feet long at the actual spacing is kept. On the regression routes this dropped 3 of 2,084 curves, all sharp corners with radii of 19 to 30 feet.
+
+Where a spiral leads into the arc, the curvature passes half the arc's curvature near the middle of the spiral. That point is close to the PC of the circular curve, with the same radius and deflection angle, that would replace the spirals and arc. HPMS reports curves and gives no instruction on spirals, so RAT reports that curve and makes no allowance for the spirals. On the as-built plan sets, at the national smoothing factor of 30, the median length from Eq. 4.13 was 0.99 of the plan length on curves without spirals. On curves with spirals it was 0.70 of the plan length from the start of the first spiral to the end of the second, since the reported curve leaves out about half of each spiral.
+
+The deflection angle (Eq. 4.9) is still measured over the whole run, so it is the full turn of the curve, spirals included. The ends of the measured run are reported as `Run_Start_Dist` and `Run_End_Dist`, and they are where the PI is found (Section 4.4.3).
+
+Earlier versions also labeled each curve "Simple" or "Spiral" (`Transition_Type`) from the shape of the smoothed curvature, with the ends of the central part as SC and CS points. On the plan sets the label agreed with the plans on 39 of 64 curves, and every circular curve on the Iowa Interstate plans was labeled "Spiral", so the label and the SC and CS points were removed.
+
+#### 4.4.3 Point of Intersection and Tangent Length
+
+Design plans give each horizontal curve's point of intersection (PI), where the tangents on either side of the curve meet, and its tangent length $T$. RAT finds the PI on the smoothed line by extending the line's tangents at the first point $i_s$ and last point $i_e$ of the curve's measured run until they meet. The road is straight beyond those points, so the tangents there are the road's tangents:
+
+$$
+\mathbf{p}_s + t_{in}\,\mathbf{u}_s = \mathbf{p}_e - t_{out}\,\mathbf{u}_e \qquad \text{(4.14)}
+$$
+
+where:
+
+| Symbol | Meaning |
+| :--- | :--- |
+| $\mathbf{p}_s, \mathbf{p}_e$ | points $i_s$ and $i_e$ of the smoothed line (UTM, m) |
+| $\mathbf{u}_s, \mathbf{u}_e$ | unit vectors along the line in the direction of travel at $i_s$ (toward the next point) and at $i_e$ (from the previous point) |
+| $t_{in}, t_{out}$ | distances from the start and from the end of the measured run to the PI (m) |
+
+Eq. 4.14 is two linear equations in $t_{in}$ and $t_{out}$. The PI is reported as a distance along the route, the start of the measured run plus $t_{in}$ (`PI_Dist`), and as a reference point (`PI_MP`, Eq. 4.18). No PI is reported where the deflection angle is 170 degrees or more, since the two tangents are then close to parallel, or where $t_{in}$ or $t_{out}$ is not positive.
+
+The tangent length reported (`Tangent_ft`) is that of a circular curve with the curve's radius and deflection angle, as given on design plans:
+
+$$
+T = R \tan\left( \frac{I_c}{2} \right) \qquad \text{(4.15)}
+$$
+
+where:
+
+| Symbol | Meaning |
+| :--- | :--- |
+| $T$ | tangent length (m; reported in ft) |
+| $R$ | radius of the main arc (m), Eq. 4.10 |
+| $I_c$ | deflection angle (degrees), Eq. 4.9 |
+
+$t_{in}$ is not used as the tangent length. It is measured from the start of the measured run, which lies before the PC, so it runs longer than the plans' $T$. The PI itself depends little on where the curve begins, because it lies on the tangents. On the Mt. Idaho Grade Road, for the 13 curves that matched one plan curve each (horizontal smoothing factor 75), the PI was a median 12 feet from the plan PI; $T$ from Eq. 4.15 was a median 0.94 of the plan's $T$ (median difference 24 feet), while $t_{in}$ was a median 1.20 of it (39 feet). The PI reference point less $T$ need not equal the reported PC. For a curve with spirals, the tangent length on plans includes the spirals; Eq. 4.15 gives that of the circular curve with the reported radius alone.
 
 ### 4.5 Compound and Reverse Curves
 
@@ -1018,7 +1062,7 @@ Two curves that turn in opposite directions with little or no tangent between th
 Two curves that turn the same way with a short gap between them can be the two parts of one compound curve. When `ENABLE_MERGE` (default False) is True, RAT joins such pairs. Curves are taken in order along the chunk, and a curve is joined to the one before it when both turn the same way and the gap between them is less than
 
 $$
-L_{gap} = \max\left( L_{floor},\; f_{gap} \cdot \min\left( L_{c,1}, L_{c,2} \right) \right) \qquad \text{(4.12)}
+L_{gap} = \max\left( L_{floor},\; f_{gap} \cdot \min\left( L_{c,1}, L_{c,2} \right) \right) \qquad \text{(4.16)}
 $$
 
 where:
@@ -1032,20 +1076,20 @@ where:
 
 Using the shorter curve keeps a long curve from reaching across a large gap to a short neighbor.
 
-The joined curve runs from the start of the first curve to the end of the second, its deflection angle is the sum of the two, and its `Merge_Status` is "Compound". Its radius is the length-weighted average of the two radii:
+The joined curve runs from the PC of the first curve to the PT of the second, and its measured run from the start of the first curve's run to the end of the second's. Its deflection angle is the sum of the two, and its `Merge_Status` is "Compound". Its radius is measured again over the joined run, with Eq. 4.10 applied from the first point of the first curve's run $i_{s,1}$ to the last point of the second curve's run $i_{e,2}$:
 
 $$
-R_{12} = \frac{R_1 L_{c,1} + R_2 L_{c,2}}{L_{c,1} + L_{c,2}} \qquad \text{(4.13)}
+R_{12} = R\left(i_{s,1},\, i_{e,2}\right) \qquad \text{(4.17)}
 $$
 
-where $R_1$ and $R_2$ are the radii of the two curves (m) and $R_{12}$ is the radius of the joined curve. Its smallest radius (`Min_Radius_m`) is the smaller of the two, and its class is set from that smallest radius. It is a spiral curve if either part was; its central circular part begins at the first curve's SC point and ends at the second curve's CS point. A chain of several same-direction curves is joined one pair at a time: for the third and later curves, curve 1 in Eqs. 4.12 and 4.13 is the curve already joined, with its length measured from its start to its end (gaps included) and its radius from Eq. 4.13.
+and its class is set from that radius. Its PI and tangent length are found again over the joined curve (Eqs. 4.14 and 4.15). Its smallest radius (`Min_Radius_m`) is the smaller of the two. A chain of several same-direction curves is joined one pair at a time: for the third and later curves, curve 1 in Eq. 4.16 is the curve already joined, with its length measured from its start to its end (gaps included).
 
 ### 4.6 Assigning Reference Points
 
 Curves are found in terms of distance along the chunk. HPMS works in reference points, so each distance is converted to a reference point by straight-line interpolation between the lowest and highest reference points of the chunk's records:
 
 $$
-P(d) = P_s + \frac{d}{L_d}\left( P_e - P_s \right) \qquad \text{(4.14)}
+P(d) = P_s + \frac{d}{L_d}\left( P_e - P_s \right) \qquad \text{(4.18)}
 $$
 
 where:
@@ -1057,11 +1101,11 @@ where:
 | $d$ | distance along the chunk from its first point (m) |
 | $L_d$ | length of the chunk's densified line (m), Eq. 3.2 |
 
-The same equation places the vertices, vertical curves, and grade segments. For a piece of a long chunk that was split for parallel processing (Section 2.7), $P_s$ and $P_e$ are the reference points at the ends of the padded piece, found from Eq. 4.14 applied to the whole chunk (with the length of the chunk's polyline in UTM in place of $L_d$, which differs from it by a negligible amount), so that every piece uses the same straight-line relation.
+The same equation places the vertices, vertical curves, and grade segments. For a piece of a long chunk that was split for parallel processing (Section 2.7), $P_s$ and $P_e$ are the reference points at the ends of the padded piece, found from Eq. 4.18 applied to the whole chunk (with the length of the chunk's polyline in UTM in place of $L_d$, which differs from it by a negligible amount), so that every piece uses the same straight-line relation.
 
-Eq. 4.14 assumes that reference points advance evenly along the chunk. Where a State's reference points do not, the reported reference points are shifted. On a 20-mile test of Interstate 80 in Nebraska, the HPMS bridge limits fell a consistent 0.04 to 0.05 mile past the bridges seen in the DEM, which may be an effect of this kind (Chapter 11).
+Eq. 4.18 assumes that reference points advance evenly along the chunk. Where a State's reference points do not, the reported reference points are shifted. On a 20-mile test of Interstate 80 in Nebraska, the HPMS bridge limits fell a consistent 0.04 to 0.05 mile past the bridges seen in the DEM, which may be an effect of this kind (Chapter 11).
 
-The output also gives each curve's distance along the route (`Start_Dist`, `End_Dist`, `SC_Dist`, `CS_Dist`, in meters), on the basis of Eq. 2.3: zero at reference point 0 of the route, continuing from chunk to chunk.
+The output also gives each curve's distances along the route, in meters: the PC and PT (`Start_Dist`, `End_Dist`), the ends of the measured run (`Run_Start_Dist`, `Run_End_Dist`), and the PI (`PI_Dist`). They are on the basis of Eq. 2.3: zero at reference point 0 of the route, continuing from chunk to chunk.
 
 ### 4.7 Curves at the Ends of Split Pieces
 
@@ -1107,13 +1151,15 @@ where:
 
 A point is steep when $|\gamma_i|$ is greater than `STRUCTURE_EDGE_GRADE_PCT` (default 10 percent), since few roads are that steep. Some mountain roads have pitches steeper than 10 percent, and noise in a coarse DEM can make single points that steep; test 7 of Section 5.2.3 keeps these from being taken for structures. Steep points that slope the same way and lie within 25 feet of each other are grouped into one edge, so a stair-stepped embankment counts as a single edge. An edge is kept only if the elevation change across it is at least `DIP_THRESHOLD_FT` (default 3 feet). Each edge is a drop or a rise.
 
+A road that leaves one structure and falls or climbs more steeply than 10 percent straight into the face of the next one merges with that face into one edge, which then starts or ends on the road. So where an edge begins within 25 feet of the end of an edge stepping the other way (or ends within 25 feet of the start of one), a stretch at that end of the edge that is no steeper than 30 percent and is more than 100 feet long is taken as road and left out of the edge. A structure face is steeper than 30 percent. On U.S. 44 in Providence, Rhode Island, a street falling about 11 percent for 150 feet between two short bridges had merged into the face of the second, and both bridges were missed. Faces with long gentle stretches elsewhere, such as a tunnel portal cut or the side of a river pier, are not next to an edge stepping the other way and are not changed.
+
 #### 5.2.3 Testing a Span
 
 A possible span runs from an opening edge to a closing edge: a drop then a rise for a bridge, a rise then a drop for a tunnel. The span starts one point before the opening edge and ends one point after the closing edge. It is accepted only if all of the following hold:
 
 1. **Length.** The span is no longer than `BRIDGE_MAX_LEN_FT` (default 8,200 feet) for a bridge or `TUNNEL_MAX_LEN_FT` (default 10,000 feet) for a tunnel.
 2. **Room at the ends.** There are at least 50 feet of profile beyond each end, so the road elevation there can be read.
-3. **Not on a bench (bridges only).** If another edge stepping the same way lies within 200 feet beyond either end (a second drop before the start, or a second rise after the end), the end is on a bench partway down the embankment, not at the abutment, and the span is rejected. The rule does not apply where the next edge beyond the end steps the other way and at least 100 feet of ground lies before it: the ground has come back to road level and run on, and the farther edge belongs to another structure. This keeps the first of two bridges close together from being rejected. The rule is not applied to tunnels, whose portal cuts often step more than once.
+3. **Not on a bench (bridges only).** If another edge stepping the same way lies within 200 feet beyond either end (a second drop before the start, or a second rise after the end), the end is on a bench partway down the embankment, not at the abutment, and the span is rejected. The rule does not apply where the next edge beyond the end steps the other way and at least 100 feet of ground lies before it: the ground has come back to road level and run on, and the farther edge belongs to another structure. This keeps the first of two bridges close together from being rejected. A bench is a step partway up to the road, so the ground beyond the farther step is higher than the bench. Where it is no more than `DIP_THRESHOLD_FT` higher than the span's end, the end is already at road level and the farther step belongs to the next structure, so the end is not taken for a bench. This is applied only where a structure record of about the span's own length supports the span (an HPMS record, with records of the same kind less than 100 feet apart joined, or an NBI point with its length, but without the `STRUCTURE_MATCH_TOL_FT` margin of test 7), and the end is then placed (Section 5.2.5) without moving past the next edge. Without the record, the waiver added false bridges on forest roads in Idaho; with the wider margin, it moved the end of a short bridge in Snohomish County, Washington, 220 feet up the hillside. On U.S. 44 in Providence it gives four bridges where none were found before. The rule is not applied to tunnels, whose portal cuts often step more than once.
 4. **Road beyond the ends.** The average grade of the ground over the 150 feet beyond each end is no steeper than 15 percent. Steeper ground there is hillside, not road.
 5. **Ground on the gap or hump side.** The elevation at each end, $z_s$ and $z_e$, is read from a straight line fitted to the 50 feet of profile just outside that end. For each point $i$ between the ends, the depth below (bridge) or above (tunnel) the line joining the two ends is
 
@@ -1209,11 +1255,13 @@ where $i_s$ and $i_e$ are the span's ends after they are placed (Section 5.2.5) 
 
 A bridge held level at the end of the data on the strength of a nearby record (Section 5.2.6) is labeled 1_HPMS if an HPMS bridge record lies within 300 feet of it, otherwise 2_NBI.
 
+On a bridge 300 feet or longer, the straight line of Eq. 5.4 is then replaced by the deck measured from lidar where lidar is available (Section 5.2.11).
+
 A record or inventory point that has no span near it leaves the profile unchanged. This is the case for a bridge that carries another road over the route, and where the DEM happens to keep a bridge deck. The vertex table records each point's match to a record in `Structure_Record` (HPMS, NBI, or None), whether or not a span was found there.
 
 #### 5.2.9 Holding the Profile to the Span Line
 
-The profile spline (Section 5.3) gives each span point a higher weight so that the smoothed profile follows the span line. The weight rises from about 1 at each end of a span to 100 at 200 feet inside it:
+The profile spline (Section 5.3) gives each point on a span line (`Elev_Source` = Span line, Section 5.2.11) a higher weight so that the smoothed profile follows the span line. Points on a deck measured from lidar, on a gap line, or raised to the clearance floor keep the weight of 1, like the DEM, since they are measurements or a floor rather than a straight line the profile must hold to. The weight rises from about 1 at each end of a span to 100 at 200 feet inside it:
 
 $$
 w_i = 1 + 99 \min\left( 1,\; \frac{\xi_i}{200} \right) \qquad \text{(5.5)}
@@ -1232,9 +1280,27 @@ The weight tapers in from the ends because the road usually has a vertical curve
 
 #### 5.2.10 Bridge Ends on Steep Approaches
 
-The straight span line and the taper of Eq. 5.5 work well where the approach grade is close to the deck grade. Where they differ sharply, for example a 5 percent approach meeting a nearly flat deck, the spline rounds the corner on the approach side, and the smoothed profile can run 1 to 2 feet below the DEM just before the abutment. This can produce a short grade segment one class steeper than the road and a sharp sag or crest at the bridge end with a low supported design speed. Examples were found on Interstate 5 in Washington (2.3 feet at the East Fork Lewis River bridge), Interstate 70 in Colorado, and Interstate 80 in Iowa. Lowering the vertical smoothing factor does not remove the effect. It is listed as a known limitation (Chapter 11).
+The straight span line and the taper of Eq. 5.5 work well where the approach grade is close to the deck grade. Where they differ sharply, for example a 5 percent approach meeting a nearly flat deck, the spline rounds the corner on the approach side, and the smoothed profile can run 1 to 2 feet below the DEM just before the abutment. This can produce a short grade segment one class steeper than the road and a sharp sag or crest at the bridge end with a low supported design speed. Examples were found on Interstate 5 in Washington (2.3 feet at the East Fork Lewis River bridge), Interstate 70 in Colorado, and Interstate 80 in Iowa. Lowering the vertical smoothing factor does not remove the effect. It is listed as a known limitation (Chapter 11). Where the deck is measured from lidar (Section 5.2.11), the deck's own grade replaces the straight line and the effect is much smaller: at the East Fork Lewis River bridge the largest dip below the DEM on the approach fell from 2.3 to 1.1 feet, and the sag over the bridge went from class E to class A.
 
 A sag curve that lies partly on a bridge span is flagged `False_Valley_Warning`. The flag marks a sag that may be real (a bridge in a valley) or may come from the repair or from the effect described above. Crests at bridge ends are not flagged.
+
+#### 5.2.11 Bridge Decks from Lidar
+
+The bare-earth DEM removes bridge decks, and the span line of Eq. 5.4 is straight, so a bridge that rises to a high main span, or whose deck is curved in profile, is drawn too low or with the wrong grades. The lidar point clouds the DEM is made from still hold the deck. On each bridge span 300 feet or longer (`LIDAR_MIN_SPAN_FT`), RAT reads the lidar points around the span and replaces the straight line with the measured deck (`core/rat_lidar.py`). This is on by default (`USE_LIDAR_BRIDGE_DECKS`; the GUI's **Bridge decks from lidar** box) and is used by the alignment and plan and profile tools. It needs the `laspy` package with LAZ support; without it, or without network access to the lidar sources, bridges keep the straight line and the Run Log says why. Tunnels are not changed.
+
+**Reading the points.** The points are read in a window around the span: the span plus 300 feet of road at each end (`LIDAR_WINDOW_PAD_FT`), and 60 feet each side of the HPMS line (`LIDAR_WINDOW_HALF_WIDTH_FT`). The lidar projects that cover the window are found through The National Map, and up to three are read (`LIDAR_MAX_PROJECTS`), newest first; older projects fill parts of the deck the newer ones lack. Each project is read from the copy of 3DEP that USGS publishes in Amazon's public cloud (Entwine Point Tiles), for the window only and down to a point spacing of about 0.5 meter (`LIDAR_EPT_RESOLUTION_M`). A project that is not in that copy is read from whole USGS tiles clipped to the window, if its tiles total no more than 600 MB (`LIDAR_MAX_TILE_MB`). A tile that does not state its coordinate system is placed in the NAD83 system that puts it where USGS lists it. A project that cannot be downloaded is left out and the others are used; the Run Log names it, and the next run tries it again.
+
+The points are kept in a `lidar` folder in the DEM folder, one file per window and project, and whole USGS tiles in its `_raw` folder (`LIDAR_KEEP_RAW_TILES`), so later runs and other bridges on the same tile read them from disk. In a statewide run the worker processes share this folder (Section 2.7). A file one worker is downloading is claimed with a lock file and waited for by the others. Requests to the USGS tile server are spaced at least 5 seconds apart (`LIDAR_TILE_PAUSE_S`), and those to The National Map 1 second apart (`LIDAR_TNM_PAUSE_S`), across all the workers. When a server refuses a request for being one of too many, the spacing doubles, up to 60 seconds (`PACER_MAX_PAUSE_S`); refusals of requests that were already sent when it went up do not double it again. It halves after two downloads in a row succeed, and also after 5 minutes with no further increase (`PACER_EASE_AFTER_S`). A bridge refused that way is tried once more at the end of the piece of road, after 2 minutes. After three bridges in a row fail for other reasons (no network, or the sources are down), lidar is not tried again in that worker for the rest of the run. The National Map sometimes lists no lidar for an area it lists at other times, so an empty listing is asked again three times, 20 seconds apart, and is not kept.
+
+**The deck.** Deck points are the points classified as bridge deck (ASPRS class 17) within 20 feet of the line (`LIDAR_DECK_HALF_WIDTH_FT`), the travel lanes. For a project that does not classify decks, unclassified points (classes 0 and 1) at least 3 feet above the DEM are taken instead. The points are grouped in 25-foot bins along the line (`LIDAR_BIN_FT`). In each bin, points more than 3 feet from the bin's median (vehicles, railings) are dropped, and the median of the rest is the deck elevation, if at least 5 points remain. A bin more than 2 feet from the median of the bins around it is dropped.
+
+Each project is checked against the DEM before it is used. The median difference between its ground points (class 2) within 6 feet of the line, off the span, and the DEM is removed from its deck elevations, and a project whose median is more than 3 feet is not used (`LIDAR_DATUM_MAX_FT`). The measured deck must also meet the span's end elevations from the DEM within 5 feet, within 150 feet of each end; otherwise the points belong to another structure, such as a parallel bridge, and the lidar is not used. A span that runs off the end of the data (Section 5.2.6) has no abutment at that end: the deck is not checked there and is carried level from the nearest measured point out to the end.
+
+**Gaps.** Bins up to 100 feet apart are joined by straight lines as measured deck (`LIDAR_MAX_INTERP_FT`). A longer stretch with no deck points is a gap. Lidar surveys often stop at the shoreline, so the deck over open water may have none, as on the Mount Hope and Newport bridges in Rhode Island. A gap is a straight line between the last measured points on either side (a gap line). Where NBI Item 38 says the bridge is over a navigable channel, the line is raised where needed to a floor: the water (the 5th percentile of the DEM in the gap) plus the navigation vertical clearance, Item 39. The deck cannot be lower than that. Each measured approach grade, fitted to the measured deck within 200 feet of the gap and at most 15 percent, is carried into the gap until it reaches the floor, and the deck runs level between. The floor only raises the line. Item 39 is the clearance to the underside of the structure over the channel, and the NBI does not give the depth of the structure, so the floor is a lower limit, not the deck elevation.
+
+**Results.** Each vertex records where its elevation came from (`Elev_Source`): DEM, Span line (a span with no lidar used), Lidar deck, Gap line, or Clearance floor. Vertical curves within 200 feet of a gap line or the clearance floor are left out of the curve tables, since the elevations there are not measured (Section 5.5); grade segments still use all of the profile. The Run Log gives a line for each bridge: the length measured, the highest measured point, and the projects used, or why the lidar was not used.
+
+On the tests, the Mount Hope bridge was measured over 3,544 feet with a high point of 147.0 feet, where the straight line ran up to 59 feet low; neither survey has points over the 1,499 feet of the main span over open water, so its crest is not measured. The Indian River Inlet bridge (Delaware) was measured over its whole 2,638 feet. On the East Fork Lewis River bridge (Interstate 5, Washington), the measured deck is curved, falling 3.3 percent at the south abutment and easing to flat, in place of the straight 0.9 percent line. On the Jamestown bridge (Rhode Island), the floor (Item 39, 41.1 meters) raised a 5,649-foot gap line.
 
 ### 5.3 Smoothing the Profile
 
@@ -1287,9 +1353,11 @@ which corresponds to a K value of about 1,640 feet per percent. A point where th
 
 When `TRIM_CURVE_ENDPOINTS` is True, points at each end of a run with $|r_i| < 1.10\,\tau_V$ are dropped. A run shorter than `V_MIN_CURVE_LENGTH_FT` (default 200 feet), or with fewer than 5 points, is dropped.
 
+A vertical curve that lies on, or within 200 feet of, a gap line or the clearance floor on a bridge deck (Section 5.2.11) is left out of the curve tables, since the profile there is a straight line or a floor drawn where the lidar has no deck points, not a measured deck. Such curves are still used to divide the profile into grade segments (Section 5.7).
+
 #### 5.5.2 Fitting the Parabola
 
-A parabola is fitted to the smoothed profile over the run by least squares:
+Each candidate is fitted with a parabola over its run, and the parabola's values are reported as described here. With `V_FIT_DESIGN_PROFILE` set to True (off by default), the geometry is instead fitted as a design profile (Section 5.5.3), starting from these curves. A parabola is fitted to the smoothed profile over the run by least squares:
 
 $$
 \hat{z}(d) = a d^2 + b d + c \qquad \text{(5.10)}
@@ -1331,7 +1399,7 @@ in the units of $L_v$ (column `E`, in meters).
 
 A candidate is dropped if $|A|$ is less than `V_MIN_GRADE_CHANGE` (default 0.5 percent) or $E$ is less than `V_MIN_OFFSET_FT` (default 0.10 foot). The 0.5 percent threshold matches the boundary between grade classes A and B in HPMS Item 45. A grade change smaller than that makes no vertical point of intersection, so the two grades on either side of it become one grade segment with their average grade (Section 5.7). A larger threshold would merge grades that differ by more than the width of class A, which could move a segment into a different class.
 
-The curve is a crest if the smoothed profile at the middle point of the run lies above the straight line joining the profile at the two ends of the run, and a sag otherwise (`Type`).
+The curve is a crest if the smoothed profile at the middle point of the run lies above the straight line joining the profile at the two ends of the run, and a sag otherwise (`Type`). (After the fit of Section 5.5.3, the type follows the sign of $A$.)
 
 The vertical point of intersection (VPI) of a symmetric parabola lies midway between the ends of the curve, at the elevation reached by extending the incoming grade:
 
@@ -1348,6 +1416,38 @@ where:
 | $\hat{z}(d_s)$	| elevation of the fitted parabola (Eq. 5.10) at the start of the curve (m) |
 | $d_s$, $d_e$, $G_1$, $L_v$	| as in Eqs. 5.10 to 5.13 |
 
+#### 5.5.3 Fitting the Design Profile (Optional)
+
+This fit is made only when `V_FIT_DESIGN_PROFILE` is True. It is off by default in this version because the tests below do not yet show that it classes curves on real roads better than the parabola. The smoothing spreads each vertical curve over a longer stretch than the curve itself, and a parabola fitted to the smoothed profile does not hold the grades of the tangents on either side. On synthetic profiles with known curves and noise like the DEM's, the runs of Section 5.5.1 were 1.3 to 1.7 times the design length, and the grade change $A$ from the parabola's end slopes (Eq. 5.11) was 1.2 to 1.3 times the design value. The two errors partly cancel in $K$.
+
+The fit draws the geometry of the curves the way a design profile is drawn: straight grades between the VPIs, with each VPI rounded by a symmetric parabolic curve. The profile is fitted to the profile before smoothing (the DEM, with structure spans repaired and decks from lidar, Section 5.2), so the smoothing does not lengthen the curves. With VPIs at distances $d_1 < d_2 < \dots$, VPI elevations $z_1, z_2, \dots$, curve lengths $L_1, L_2, \dots$, and the ends of the chunk as two more points with no curve, the grade between VPIs $i$ and $i+1$ is $g_i = (z_{i+1} - z_i)/(d_{i+1} - d_i)$, and the elevation of the design profile within curve $i$ is
+
+$$
+\tilde{z}(d) = z_i + g_{i-1}\,(d - d_i) + \frac{g_i - g_{i-1}}{2 L_i}\left(d - d_i + \frac{L_i}{2}\right)^2, \qquad |d - d_i| < \frac{L_i}{2} \qquad \text{(5.16)}
+$$
+
+and the straight line joining the VPIs elsewhere. Curves may not overlap. For given positions and lengths the design profile is linear in the VPI elevations, which are found by least squares:
+
+$$
+\min_{z_0, z_1, \dots} \sum_k \left(\tilde{z}(d_k) - z_k\right)^2 \qquad \text{(5.17)}
+$$
+
+where:
+
+| Symbol | Meaning |
+| :--- | :--- |
+| $d_i$, $z_i$ | distance and elevation of VPI $i$ (m), `VPI_Dist`, `VPI_Elev_Ft` (in feet) |
+| $L_i$ | length of curve $i$ (m), `Length_m` |
+| $g_i$ | grade between VPIs $i$ and $i+1$ (rise per run) |
+| $\tilde{z}(d)$ | elevation of the design profile at distance $d$ (m) |
+| $d_k$, $z_k$ | distance and elevation of each point of the profile before smoothing (m) |
+
+Each curve starts at the VPI of its parabola (Eq. 5.15) with a length found the way the horizontal curve ends are (Section 4.4.2): the length between the first and last points of its run where the rate of change of grade on the smoothed profile reaches half its central rate, the central rate being the grade change over the shortest stretch of the run that carries 60 percent of the run's change, divided by that stretch's length. Each VPI's position and length are then searched in turn, the others held, by a pattern search that keeps any move that lowers the sum in Eq. 5.17, three times over all VPIs (`V_FIT_SWEEPS`). Moving one VPI changes the design profile only between the end of the curve two VPIs back and the start of the curve two VPIs ahead, so only that stretch is fitted again for each trial. No curve is made shorter than 50 feet (`V_FIT_MIN_LENGTH_FT`). Each VPI stays within the run its curve was found on, and no curve is longer than that run. Every curve stays in the fitted profile, but one whose fitted grade change falls under `V_MIN_GRADE_CHANGE`, or whose middle ordinate falls under `V_MIN_OFFSET_FT`, is not reported.
+
+The reported grades are the fitted grades on either side of the VPI, $G_1 = 100\,g_{i-1}$ and $G_2 = 100\,g_i$, and $A$, $K$, and $E$ follow from them and $L_i$ by Eqs. 5.12 to 5.14. The curve runs from the PVC at $d_i - L_i/2$ to the PVT at $d_i + L_i/2$ (`Start_Dist`, `End_Dist`); the run it was found on is kept as `Run_Start_Dist` and `Run_End_Dist`. It is a crest where $A$ is negative and a sag where it is positive. Grades, VPI, length, and $K$ thus come from one fitted profile.
+
+On the synthetic profiles, where curves had tangents of 600 to 2,000 feet between them, the fitted lengths were 1.02 times the design lengths and $K$ 1.01 times (median), the grades were within 0.06 percent (median), and the class matched the design on 88 percent of curves, against 80 percent from the parabola. Where curves had tangents of 0 to 400 feet between them, the class matched on 83 and 82 percent. On the Mt. Idaho Grade Road, whose as-built plans describe the existing road with 100 vertical curves in 3.8 miles, many 50 to 130 feet long, $K$ of the reported curves was 1.21 times the plan value (median), against 2.25 from the parabola, but the class matched the plans on 37 percent of curves (68 percent within one class), against 41 percent (74 percent) from the parabola. On the regression routes the fitted curves are shorter than the parabola's runs (median 314 against 460 feet), and fewer of them are class A (606 against 823) (Section 11.7). The other plan sets available (Iowa Interstates and US 75) were for reconstruction, so the DEM shows a road that differs from the plans by 1 to 5 feet and could not test the fit.
+
 ### 5.6 Vertical Curve Classes
 
 #### 5.6.1 Sight Distance Provided
@@ -1357,25 +1457,25 @@ A vertical curve limits how far a driver can see the road ahead: over a crest, t
 **Crest curves** use a driver's eye height of 3.5 feet and an object height of 2.0 feet. RAT first assumes the sight distance is less than the curve length:
 
 $$
-S = \sqrt{\frac{2158\,L_v}{|A|}} \qquad \text{for } S < L_v \qquad \text{(5.16)}
+S = \sqrt{\frac{2158\,L_v}{|A|}} \qquad \text{for } S < L_v \qquad \text{(5.18)}
 $$
 
 If that $S$ is greater than $L_v$, the case for sight distance longer than the curve applies instead:
 
 $$
-S = \frac{1}{2}\left( L_v + \frac{2158}{|A|} \right) \qquad \text{for } S > L_v \qquad \text{(5.17)}
+S = \frac{1}{2}\left( L_v + \frac{2158}{|A|} \right) \qquad \text{for } S > L_v \qquad \text{(5.19)}
 $$
 
 **Sag curves** use a headlight height of 2.0 feet and a 1-degree upward spread of the light beam. For $S < L_v$, the sight distance is the positive root of $|A| S^2 - 3.5 L_v S - 400 L_v = 0$:
 
 $$
-S = \frac{3.5 L_v + \sqrt{(3.5 L_v)^2 + 1600\,|A|\,L_v}}{2|A|} \qquad \text{for } S < L_v \qquad \text{(5.18)}
+S = \frac{3.5 L_v + \sqrt{(3.5 L_v)^2 + 1600\,|A|\,L_v}}{2|A|} \qquad \text{for } S < L_v \qquad \text{(5.20)}
 $$
 
 If that $S$ is greater than $L_v$:
 
 $$
-S = \frac{|A| L_v + 400}{2|A| - 3.5} \qquad \text{for } S > L_v \qquad \text{(5.19)}
+S = \frac{|A| L_v + 400}{2|A| - 3.5} \qquad \text{for } S > L_v \qquad \text{(5.21)}
 $$
 
 where:
@@ -1386,9 +1486,9 @@ where:
 | $L_v$ | length of the vertical curve (ft) |
 | $A$ | algebraic difference in grade (percent), Eq. 5.12 |
 
-When $|A| \le 1.75$ percent, the denominator of Eq. 5.19 is zero or negative, which means the curve does not limit headlight sight distance. $S$ is then unlimited and `SSD_Provided_Ft` is left blank.
+When $|A| \le 1.75$ percent, the denominator of Eq. 5.21 is zero or negative, which means the curve does not limit headlight sight distance. $S$ is then unlimited and `SSD_Provided_Ft` is left blank.
 
-Using the sight distance rather than the K value alone matters for short curves. For a crest with $L_v$ = 200 feet and $|A|$ = 4 percent, Eq. 5.16 gives 328 feet, which is longer than the curve, so Eq. 5.17 applies and gives 370 feet. The K value of 50 alone would suggest less.
+Using the sight distance rather than the K value alone matters for short curves. For a crest with $L_v$ = 200 feet and $|A|$ = 4 percent, Eq. 5.18 gives 328 feet, which is longer than the curve, so Eq. 5.19 applies and gives 370 feet. The K value of 50 alone would suggest less.
 
 #### 5.6.2 Design Speed Supported and Class
 
@@ -1427,10 +1527,10 @@ The speed limit is a sample data item in HPMS, so most records have none and tak
 
 ### 5.7 Grade Segments
 
-HPMS Item 45 classes the length of a section by percent grade, measured between vertical points of intersection. RAT divides each chunk into grade segments the same way. The break points are the start of the chunk, the VPI of every vertical curve in order, and the end of the chunk, with the smoothed profile elevation at the chunk ends and $z_{VPI}$ (Eq. 5.15) at each VPI. Each pair of consecutive break points is one grade segment, with grade
+HPMS Item 45 classes the length of a section by percent grade, measured between vertical points of intersection. RAT divides each chunk into grade segments the same way. The break points are the start of the chunk, the VPI of every vertical curve in order, and the end of the chunk, with the smoothed profile elevation at the chunk ends and the elevation of each VPI (Eq. 5.15, or Section 5.5.3 with `V_FIT_DESIGN_PROFILE` True). Each pair of consecutive break points is one grade segment, with grade
 
 $$
-G_{seg} = 100\, \frac{z^{b}_{j+1} - z^{b}_j}{d^{b}_{j+1} - d^{b}_j} \qquad \text{(5.20)}
+G_{seg} = 100\, \frac{z^{b}_{j+1} - z^{b}_j}{d^{b}_{j+1} - d^{b}_j} \qquad \text{(5.22)}
 $$
 
 where:
@@ -1451,16 +1551,16 @@ The segment grade is the tangent grade between VPIs, as on a design plan, not th
 
 ### 5.8 Available Sight Distance
 
-The available sight distance at each point (`Available_Sight_Dist_Ft`) is how far ahead, in the direction of increasing reference point, a driver can see a 2.0-foot object over the smoothed profile, with the eye 3.5 feet above the road. It looks ahead up to 1,500 feet (to the last whole point spacing within 1,500 feet). For a driver at point $i$, with the eye at $z_i + 3.5$ feet, the slope of the sight line to the road at a point $k$ ahead and to an object at point $j$ ahead are
+The available sight distance at each point (`Available_Sight_Dist_Ft`) is how far ahead, in the direction of increasing reference point (of decreasing reference point in a decreasing plan and profile run, Section 10.9), a driver can see a 2.0-foot object over the smoothed profile, with the eye 3.5 feet above the road. It looks ahead up to 1,500 feet (to the last whole point spacing within 1,500 feet). For a driver at point $i$, with the eye at $z_i + 3.5$ feet, the slope of the sight line to the road at a point $k$ ahead and to an object at point $j$ ahead are
 
 $$
-\sigma^{r}_k = \frac{z_k - (z_i + h_1)}{(k - i)\Delta}, \qquad \sigma^{o}_j = \frac{z_j + h_2 - (z_i + h_1)}{(j - i)\Delta} \qquad \text{(5.21)}
+\sigma^{r}_k = \frac{z_k - (z_i + h_1)}{(k - i)\Delta}, \qquad \sigma^{o}_j = \frac{z_j + h_2 - (z_i + h_1)}{(j - i)\Delta} \qquad \text{(5.23)}
 $$
 
 The object at $j$ is visible when the sight line to it clears the road at every point up to $j$:
 
 $$
-\sigma^{o}_j \ge \max_{i < k \le j} \sigma^{r}_k \qquad \text{(5.22)}
+\sigma^{o}_j \ge \max_{i < k \le j} \sigma^{r}_k \qquad \text{(5.24)}
 $$
 
 where:
@@ -1478,20 +1578,20 @@ where:
 
 Points ahead are checked in order, and the available sight distance is the distance to the last visible point before the first point that is out of view, since stopping sight distance is the length of road ahead that stays continuously visible. If no point within 1,500 feet is out of view, the available sight distance is 1,500 feet. If the view is clear to the end of the chunk and the chunk ends less than 1,500 feet ahead, the sight distance is not known and is left blank.
 
-This measure uses the vertical profile only. It does not account for horizontal curves, roadside objects, or cut slopes that block the view on the inside of a curve. Where the road passes out of view over a crest and comes back into view farther on, the sight distance ends where it first passes out of view, so a dip hidden beyond a crest limits it. The plan and profile sheets and dashboards mark points where the available sight distance is less than a warning distance. When the user enters a speed limit for a plan and profile run (Section 5.6.3), the warning distance is the stopping sight distance for that speed, interpolated linearly in Table 5-1 (for example, 495 feet at 55 mph). Otherwise it is 400 feet (`SIGHT_WARNING_FT`), a fixed value not tied to the road's speed. The alignment tool's Run Log gives the share of the network under 400 feet.
+This measure uses the vertical profile only. It does not account for horizontal curves, roadside objects, or cut slopes that block the view on the inside of a curve. Where the road passes out of view over a crest and comes back into view farther on, the sight distance ends where it first passes out of view, so a dip hidden beyond a crest limits it. The plan and profile sheets and dashboards mark points where the available sight distance is less than a warning distance. When the user enters a speed limit for a plan and profile run (Section 5.6.3), the warning distance is the stopping sight distance for that speed, interpolated linearly in Table 5-1 (for example, 495 feet at 55 mph). Otherwise it is 400 feet (`SIGHT_WARNING_FT`), a fixed value not tied to the road's speed. Points on, or within 200 feet of, a gap line or the clearance floor on a bridge deck (Section 5.2.11) are not marked, since the profile there is not measured. The alignment tool's Run Log gives the share of the network under 400 feet.
 
 ### 5.9 Roughness Proxy
 
 The vertex table gives a short-wavelength roughness measure at each point (`Micro_Jitter_Inches`). It is computed from the part of the repaired profile that the smoothing removed:
 
 $$
-\epsilon_i = z^{fix}_i - z_i \qquad \text{(5.23)}
+\epsilon_i = z^{fix}_i - z_i \qquad \text{(5.25)}
 $$
 
 The residual is passed through a second-order Butterworth high-pass filter with a cutoff wavelength of 30 meters, run forward and backward so that it does not shift the signal. This removes longer-wavelength differences between the DEM and the smoothed profile. The filtered residual $\epsilon^{hp}$ is summarized as its root mean square over a moving window centered on each point, of as many points as fit in 30 meters (19 points, about 27 meters, at 5-foot spacing; shorter at the ends of the chunk):
 
 $$
-J_i = 12 \times 3.28084\, \sqrt{\frac{1}{|W_i|}\sum_{k \in W_i} \left( \epsilon^{hp}_k \right)^2} \qquad \text{(5.24)}
+J_i = 12 \times 3.28084\, \sqrt{\frac{1}{|W_i|}\sum_{k \in W_i} \left( \epsilon^{hp}_k \right)^2} \qquad \text{(5.26)}
 $$
 
 where:
@@ -1824,127 +1924,40 @@ The tool writes a CSV file of the records with all HPMS fields (or the fields th
 
 ---
 
-## Chapter 9: Calibration
+## Chapter 9: Choosing the Smoothing Factors
 
-The horizontal smoothing factor controls how closely the smoothed line follows the HPMS line work (Chapter 3). The right value depends on how the line work was digitized, which differs by State and by functional class. The calibration tool (`tools/rat_national_calibration.py`) sets a horizontal factor for each State and functional class from the HPMS line work alone; it needs no elevation data. The settings named in this chapter are in the tool's CONFIGURATION block, and the values given for them are its defaults (Table B-4). The vertical smoothing factor is a single national value, chosen as described in Section 9.6.
+The smoothing factors control how closely the smoothed line and profile follow the data (Chapter 3). One horizontal factor, 30, and one vertical factor, 10, are used for every State and functional class (Section 3.5). This chapter describes how each was chosen.
 
-### 9.1 What the Calibration Looks For
+### 9.1 The Horizontal Factor
 
-As the smoothing factor rises from a small value, the smoothed line first loses the corners of the digitized polyline. During this stage the curves the model finds change a great deal from one factor to the next: curves split by polyline corners join up, and spurious short curves disappear. Then comes a range of factors over which the curves found hardly change. Past that range, real curves start to be flattened and merged. The calibration selects the smallest factor at the start of the stable range, so that the line is smoothed enough to give stable curves but no more. It then checks that the selected factor does not pull the line too far from the HPMS line work.
+The horizontal factor was chosen by comparing RAT's curves with the curves on as-built plans. Six plan sets were used (Table C-1): a Federal Lands Highway project on Oregon Route 140 (9 curves, 8 with spirals), the Mt. Idaho Grade Road, a Federal Lands forest road in Idaho (54 curves, mostly simple), and four Iowa DOT Interstate projects on Interstate 80 eastbound and westbound, Interstate 380, and Interstate 35 (circular curves). Each was run through the plan and profile tool at factors from 10 to 150, and each plan curve was paired with the RAT curve that overlaps it and turns the same way. The Oregon and Idaho curves were placed on the HPMS line from the reference points or stations on the plans, and the Interstate 80 westbound curves from the plan coordinates of their PCs and PTs. The other Iowa plans give no coordinates, so each of their curves was placed at the point where the RAT curve has turned half its deflection angle, and its start and end compared from there; on Interstate 80 westbound this reproduced the comparison by coordinates.
 
-### 9.2 Sample Size
+Table 9-1 gives the results for all six plan sets together, with curve ends set as in Section 4.4.2. Appendix C gives them for each plan set.
 
-The calibration uses the records of facility types 1 and 2 in every functional class. Records with a blank functional system or facility type are left out (`INCLUDE_MISSING_FSYSTEM` and `INCLUDE_MISSING_FACILITY`, both False; Section 2.2.1). In Idaho, where no records are coded functional class 7, the records with a blank functional system are forest roads whose line work is often 5 to 20 feet from the road (Section 11.4), and they would otherwise make up the whole class 7 sample. For each State and functional class, the HPMS records are grouped by route, joined in submission order or by location as in production (Sections 2.3.1 and 2.3.2, with the 100-foot join tolerance), and cut into one-mile pieces. A remaining piece of at least half a mile (800 m) at the end of a line is kept as well, and a line between half a mile and a mile long is kept as one piece, so that short routes are represented. Lines shorter than half a mile give no pieces. The pieces form the population from which samples are drawn.
+**Table 9-1. RAT curves against as-built plans by horizontal smoothing factor (all plan sets)**
 
-The number of pieces sampled is set by Cochran's formula with a finite population correction:
+| Factor | Curves matched | Median distance from plan PC / PT (ft) | Median length / plan length | Median of \|length / plan length − 1\| | Median radius / plan radius |
+| ---: | ---: | :---: | ---: | ---: | ---: |
+| 10 | 47 | 98 / 68 | 0.85 | 0.31 | 0.93 |
+| 20 | 61 | 73 / 71 | 0.84 | 0.28 | 0.94 |
+| 30 | 64 | 71 / 69 | 0.89 | 0.25 | 0.98 |
+| 50 | 63 | 74 / 76 | 0.92 | 0.25 | 1.00 |
+| 75 | 63 | 74 / 75 | 0.89 | 0.34 | 0.99 |
+| 150 | 64 | 68 / 76 | 0.90 | 0.34 | 1.03 |
 
-$$
-n_0 = \frac{Z^2\, V}{B^2}, \qquad n = \left\lceil \frac{n_0}{1 + (n_0 - 1)/N_{pop}} \right\rceil \qquad \text{(9.1)}
-$$
+Factors of 30 and 50 matched the plan lengths about equally well over all the curves. At 50 and above, though, the short, flat curves on the Iowa Interstates (under 1,000 feet long and turning less than 5 degrees) came out too long: at 50, 1.62 times the plan length on Interstate 80 eastbound and 1.22 times on Interstate 35, and up to 2.08 times at 150 (Table C-2). At 10, the smoothed line kept enough of the HPMS polyline's corners that 22 of the Idaho plan curves were not matched one to one. Thirty was adopted. It was already the national default for functional classes 3 to 6, and an earlier test on a local grid road in Iowa had also favored a factor near 30. The median radius at 30 was 0.98 of the plan radius.
 
-where:
+On the curves with spirals (Oregon Route 140 and part of the Idaho road), RAT's curves are shorter than the plans' lengths from the start of the first spiral to the end of the second (0.75 on Oregon Route 140), since RAT reports the circular curve that would replace the spirals and arc (Section 4.4.2). On curves without spirals, the median length at 30 was 0.99 of the plan length.
 
-| Symbol | Meaning |
-| :--- | :--- |
-| $Z$ | standard normal value for the confidence level, 1.960 for 95 percent |
-| $B$ | margin of error, 0.05 |
-| $V$ | variance term (see below) |
-| $N_{pop}$ | number of pieces in the population |
-| $n$ | sample size (no more than $N_{pop}$) |
+### 9.2 Effect on Other Roads
 
-Cochran's formula is written for a yes-or-no outcome, with $V = p(1-p)$. The calibration is really estimating the curve class mix, so $V$ is taken as the largest variance among the six HPMS curve classes:
+Each route of the regression set (plan and profile runs on test routes across the country) was processed both at the factors earlier versions used for its State and functional class and at 30, with the curve ends of Section 4.4.2. On the 29 routes whose earlier factor was above 30 (mostly 75 to 150), the number of curves rose from 1,470 to 1,580 and the curve miles fell from 90.7 to 83.9. Curves shorter than 300 feet rose from 1,098 to 1,262, and pairs of curves turning the same way less than 200 feet apart from 159 to 275. Nearly all of the increase was on winding forest and mountain roads: on the Pikes Peak Highway the close pairs went from 34 to 69, and on an Idaho forest road from 61 to 102. Interstates changed little (Interstate 70 in Colorado, 40 curves to 45; Interstate 80 in Nebraska, Interstate 95 in Rhode Island, Interstate 380 in Iowa and Interstate 595 in Maryland unchanged). On the 5 routes whose earlier factor was below 30 (10 to 20, in Alaska and Washington) little changed. Over all the routes, the curve miles in each HPMS class changed by less than 15 percent: class A 73.0 to 70.6 miles, B 20.4 to 19.9, C 12.5 to 11.7, D 12.8 to 11.1, E 16.8 to 15.5, and F 10.6 to 11.1.
 
-$$
-V = \max_{k \in \{A,\ldots,F\}} p_k (1 - p_k) \qquad \text{(9.2)}
-$$
+Some of the close pairs on the winding roads are real compound or broken-back curves, and some are one curve split where the HPMS line wavers (Section 11.6).
 
-where $p_k$ is the share of length in curve class $k$. This gives the required precision for every class. The shares come from the curve data States report to HPMS (Item 43), prepared once per HPMS release by `tools/pull_national_curve_distribution.py`. That script groups records by Sample Panel (`SAMPLE_ID`). States place the curve values on a panel's records in different ways: some repeat the panel's values on every record, some put them on one record and leave the others blank, and some split them among the records. Where every record that carries values carries the same values, they are taken once; otherwise they are summed. The panel length is the total length of all the panel's records. Class A is the panel length minus classes B through F. A panel that reports more curve mileage than its length is left out. The shares are length-weighted sums over the panels. Curve data are reported only on HPMS sample panels, and local roads (functional class 7) are not part of the HPMS sample, so almost no class 7 panels exist. A State and functional class with fewer than 10 panels uses the national shares. Local roads (functional class 7) are not in the HPMS sample and have no curve data, so class 7 uses $V = 0.25$ ($p = 0.5$), which gives the largest sample. The same value is used for any other class without the shares file or with no data at either level.
+### 9.3 The National Vertical Factor
 
-### 9.3 Stability Search
-
-Each sampled piece is projected to UTM and densified at 10 feet, so a one-mile piece has about 528 intervals and the spline condition $s$ equals the smoothing factor. On shorter pieces $s$ is scaled to the number of points by Eq. 3.5, as in production. The sample is smoothed at every value in the grid of Table 9-1.
-
-**Table 9-1. Smoothing factors tested (`VITERBI_S_GRID`)**
-
-| Use | Smoothing factors |
-| :--- | :--- |
-| Can be selected | 5, 10, 15, 20, 30, 40, 50, 75, 100, 150, 200, 300, 400, 600, 800, 1,200, 1,800 |
-| Tested only to check stability | 2,500, 3,500, 5,000, 7,500, 10,000, 15,000, 20,000, 30,000, 50,000 |
-
-Values above 2,000 cannot be selected (`VITERBI_MAX_SELECTABLE_S`). They are tested so that a run of stable transitions that starts at one of the larger selectable values can be followed to its end, and so that a result that becomes stable only above 2,000 is recognized and left blank. At each value, the curvature of each smoothed piece is labeled with the same Viterbi labeling and threshold used in production (Section 4.2.2). Runs of curve points that turn the same way and are less than 150 meters apart are joined, so that the two spirals of one curve count as one curve.
-
-The curves found at each grid value are compared with those found at the previous value by their length-weighted overlap. Only curves at least 100 feet long are compared. For each curve $\mathcal{A}$ at the previous value, the curve $\mathcal{B}$ at the current value that turns the same way, has not already been matched, and shares the most length with $\mathcal{A}$ is found, and the overlap ratio is
-
-$$
-\mu_{\mathcal{A}} = \frac{\left| \mathcal{A} \cap \mathcal{B} \right|}{\left| \mathcal{A} \cup \mathcal{B} \right|} \qquad \text{(9.3)}
-$$
-
-The overlap for the transition between the two grid values, pooled over all pieces in the sample, is
-
-$$
-\bar{\mu} = \frac{\sum_{\mathcal{A}} \mu_{\mathcal{A}}\, |\mathcal{A}|}{\sum_{\mathcal{A}} |\mathcal{A}|} \qquad \text{(9.4)}
-$$
-
-where:
-
-| Symbol | Meaning |
-| :--- | :--- |
-| $\mathcal{A}$ | a curve found at the previous grid value |
-| $\mathcal{B}$ | the curve matched to it at the current grid value |
-| $|\mathcal{A} \cap \mathcal{B}|$ | length the two curves share |
-| $|\mathcal{A} \cup \mathcal{B}|$ | length the two curves cover together |
-| $\mu_{\mathcal{A}}$ | overlap ratio of curve $\mathcal{A}$; 0 if it has no match |
-| $|\mathcal{A}|$ | length of curve $\mathcal{A}$ |
-| $\bar{\mu}$ | length-weighted overlap for the transition between the two grid values |
-
-$\bar{\mu}$ near 1 means the curves did not change between the two values.
-
-A transition is stable when $\bar{\mu}$ is at least the threshold for the functional class: 0.90 for functional classes 1 and 2, and 0.85 for classes 3 through 7 (`VITERBI_STABILITY_THRESHOLD_BY_FS`). The selected factor is the grid value at the start of the first run of 8 consecutive stable transitions (`FIXED_DURABLE_WINDOW`). If that value is above 2,000 (`VITERBI_MAX_SELECTABLE_S`), the result is left blank, since larger values were seen to distort curves visibly on plan views. If no such run exists, the result is also blank.
-
-### 9.4 Fidelity Limit
-
-The stability search of Section 9.3 finds the factor at which the curves stop changing, but it does not check that the smoothed line still follows the road. In dense urban grids, short curves and tight corners keep changing as the factor grows, and the curves become stable only at a factor large enough to smooth those features away. At that factor the smoothed line cuts inside the corners and lies well off the road. To prevent this, the distance between each smoothed point and its densified HPMS point is measured at every grid value, and the 99th percentile over the points labeled as curve is recorded. Smoothing moves the line most on curves and corners. Tangent points barely move, and including them would lower the percentile on samples that are mostly tangent, such as local road grids:
-
-$$
-\delta_{99}(F) = Q_{99,\, i \in \mathcal{C}(F)}\left( \sqrt{(x^{raw}_i - x_i)^2 + (y^{raw}_i - y_i)^2} \right) \qquad \text{(9.5)}
-$$
-
-where:
-
-| Symbol | Meaning |
-| :--- | :--- |
-| $\delta_{99}(F)$ | 99th percentile departure at smoothing factor $F$ (ft) |
-| $Q_{99,\, i \in \mathcal{C}(F)}$ | 99th percentile over the points $i$ in $\mathcal{C}(F)$ |
-| $\mathcal{C}(F)$ | points in the sample labeled as curve at factor $F$ (Section 9.3); all points if none is |
-| $x^{raw}_i, y^{raw}_i$ | densified HPMS point $i$ before smoothing (ft) |
-| $x_i, y_i$ | smoothed point $i$ at factor $F$ (ft) |
-
-A factor is acceptable only if $\delta_{99}$ is no more than 6 feet (`MAX_DEPARTURE_P99_FT`, half of a 12-foot lane). If the stable factor of Section 9.3 departs more than that, the largest smaller grid value that meets the limit is selected instead. If no smaller grid value meets it, the smallest grid value (5) is selected, the least smoothing the grid allows.
-
-Each repeat also records its fidelity cap: the largest grid value, no more than 2,000, that meets the limit. The cap is recorded even when the curves never become stable, and it is used to fill blanks (Section 9.5).
-
-### 9.5 Repeats and Final Values
-
-Each State and functional class is calibrated 5 times (`N_REPEATS_PER_STATE`), each time with a new random sample. The repeats are combined as follows:
-
-1. At least half of the repeats (`MIN_CONVERGED_FRACTION`), that is 3 of the 5, must give a value. Otherwise the result is blank.
-2. When at least 4 repeats gave a value, the 20 percent of them that agree least are set aside (`DROP_FRACTION`), but never so many that fewer than 3 remain. The values are sorted, and of all runs of consecutive sorted values of the remaining size, the run with the smallest spread is kept.
-3. The spread of the kept values is
-
-   $$
-   \psi = \frac{F_{\max} - F_{\min}}{\tilde{F}} \qquad \text{(9.6)}
-   $$
-
-   where $F_{\max}$ and $F_{\min}$ are the largest and smallest kept values and $\tilde{F}$ is their median. If $\psi$ is more than 1.0 (`MAX_SPREAD_RATIO`), the repeats are not consistent and the result is blank.
-4. Otherwise the final value is the lower median of the kept values: the middle value, or the lower of the two middle values when their number is even. The final value is therefore always a value that one of the repeats selected, and always a grid value.
-
-Blank results are then filled. For each functional class, the cross-State fill value is the lower median of all the States' final values. A blank cell takes the smaller of that fill value and the State's own fidelity cap for that functional class (the lower median of its repeats' caps). A State's own calibrated value is never replaced. The filled values are written to `national_smoothing_factors_CV_national_filled.json`, which is copied to `core/national_smoothing_factors.json` to put the factors into use. The national defaults of Table 3-2 are the cross-State lower medians.
-
-The calibration also writes an audit table with one row for each repeat (its selected factor, the overlap at selection, its 99th percentile departure, and its fidelity cap) and one row for each State and functional class with the final value and the spread ratio. `tools/rat_calibration_diagnostics.py` charts and checks the audit table.
-
-### 9.6 The National Vertical Factor
-
-All elevations come from one source, the USGS 3DEP DEM, so the vertical smoothing factor is a single national value rather than one per State. It was chosen with the same idea as the horizontal calibration: find the smallest factor at which the vertical curves found stop changing.
+All elevations come from one source, the USGS 3DEP DEM, so the vertical smoothing factor is a single national value. It was chosen by finding the smallest factor at which the vertical curves found stop changing.
 
 The raw 1-meter elevations of test routes (5-foot spacing, with points within 200 feet of bridge and tunnel spans left out) were smoothed at factors from 0.25 to 100 with the production spline and vertical curve detection, and the number of vertical curves per mile was counted at each factor. On pavement, the point-to-point noise in the 1-meter DEM was only 0.02 to 0.06 foot, so the extra curves at small factors come from undulations of medium wavelength in the surface model rather than from noise at single points.
 
@@ -1960,9 +1973,9 @@ The raw 1-meter elevations of test routes (5-foot spacing, with points within 20
 
 On both routes the count fell quickly as the factor rose and then held nearly steady before real curves began to merge: from about 8.5 to 20 on US 20, and from about 10 to 25 on Interstate 70. Short vertical curves (under 500 feet) had disappeared by a factor of 8.5 to 10. The start of the stable range was 8.5 on US 20 and 10 on Interstate 70, and 10 was adopted. By Eq. 3.7, a factor of 10 holds the smoothed profile to about 0.45 foot RMS from the DEM. A 20-mile section of Interstate 80 in Nebraska had too few vertical curves to show a stable range, and an urban arterial in the District of Columbia, with many real short curves, showed none.
 
-### 9.7 Route Cross-Check in the Plan and Profile Tool
+### 9.4 Earlier Factors by State and Functional Class
 
-The plan and profile tool repeats the stability search of Section 9.3 on its own route, using a random 20 percent (at least 3) of the route's one-mile pieces, and reports the result beside the horizontal factor the run used, in the calibration cross-check dashboard. The check is for information only. It does not change the factors used, and a single route's sample is much less reliable than the State samples the national factors came from.
+From October to November 2026, the horizontal factors were set separately for each State and functional class by a calibration tool (`tools/rat_national_calibration.py`, since removed). It cut each State's HPMS line work into one-mile pieces, drew a random sample sized with Cochran's formula, and for each piece found the smallest factor at which the curve classification stopped changing from one factor to the next, then held the factor to the value at which the 99th percentile departure at curve points was no more than 6 feet. The factors it set ran from 5 to 150, with national defaults by functional class of 75, 100, 30, 30, 30, 30 and 75. They were chosen for the stability of the curve classification, not for the position of curve ends, and the higher values lengthened short, flat curves on Interstates well past their plan lengths (Section 9.1). The single factor of Section 9.1 replaced them in November 2026.
 
 ---
 
@@ -1976,13 +1989,13 @@ The alignment and 4D enrichment tools write each State's files to a folder `Outp
 
 The version number is claimed when the run starts. The alignment tool creates its horizontal curve table, and the 4D enrichment tool its CSV file, under the first version number not yet taken, as an empty file that the run later replaces. A second run started on the same day, even while the first is still running, therefore gets the next number and cannot overwrite the first run's files. If a run ends without writing that file, the empty file is removed. If an alignment run writes its other files but finds no horizontal curves, the horizontal curve table is kept with a header line only.
 
-The plan and profile tool writes to the output folder. All of its files share the name `plan_profile_<route>_MP_<begin>_to_<end>`, where `<begin>` and `<end>` are the lowest and highest reference points processed, to three decimals. When the user gives a begin and end reference point, every record that overlaps that range is processed whole, so the range processed can extend a little beyond the one requested. The Run Log gives the range requested, the number of records that overlap it, the range processed, and the full range of the route. A piece of the route that cannot be processed is logged as a warning with its reference points, and is missing from every output of the run.
+The plan and profile tool writes to the output folder. All of its files share the name `plan_profile_<route>_MP_<begin>_to_<end>`, where `<begin>` and `<end>` are the Begin RP and End RP entered, in the order entered, to three decimals; without them, the first and last reference points of the route. Section 10.9 describes how the outputs are limited to that range and how a decreasing reference point run works. The Run Log gives the range requested, the number of records that overlap it, the range processed, the full range of the route, the direction of the run, and the number of curves kept within the range. A piece of the route that cannot be processed is logged as a warning with its reference points, and is missing from every output of the run.
 
 All tables are CSV files. Reference point columns keep the names used in the code (`Milepost`, `Calibrated_Start_MP`, and so on; see Section 1.5).
 
 ### 10.2 Curve and Grade Segment Tables
 
-The **horizontal curve table** has one row per horizontal curve, with its route, distances along the route, reference points, length, radius, smallest radius, degree-of-curve class, direction, deflection angle, simple or spiral shape, and simple or compound status (Chapter 4). The alignment tool adds `Part` (the continuity chunk, Section 2.3) and the functional class. The plan and profile tool adds the curve number used on the sheets, the measured superelevation and its full-superelevation limits (Chapter 6), and `Line_Off_Road`.
+The **horizontal curve table** has one row per horizontal curve, with its route, distances along the route (PC, PT, the ends of the measured run, and the PI), reference points from PC to PT, length, radius, smallest radius, degree-of-curve class, direction, deflection angle, PI reference point and tangent length, and simple or compound status (Chapter 4). The alignment tool adds `Part` (the continuity chunk, Section 2.3) and the functional class. The plan and profile tool adds the curve number used on the sheets, the measured superelevation and its full-superelevation limits (Chapter 6), and `Line_Off_Road`.
 
 The **vertical curve table** has one row per vertical curve, with its route, part, functional class, distances, reference points, length, entering and leaving grades, algebraic difference, K value, type (crest or sag), middle ordinate, VPI, sight distance provided, design speed supported, vertical curve class, the speed comparison, and `False_Valley_Warning` (Chapter 5).
 
@@ -1992,7 +2005,7 @@ In the alignment tool, the curve tables include a `geometry` column with each cu
 
 ### 10.3 Vertex Table
 
-The vertex table has one row for every densified point (about every 5 feet): its route, part, reference point, distance along the route, smoothed position and elevation, raw position and DEM elevation, grade from the regression of Eq. 5.8, unwrapped heading, structure labels, roughness proxy, available sight distance, the curve type and class at the point, and the grade and grade class of its segment. The alignment tool also gives the functional class, the State, the HPMS IRI of the section, and the crossing fields (Chapter 7). Distance along the route is in miles (`Dist_Mi`) in the alignment tool and in feet (`Dist_Ft`) in the plan and profile tool.
+The vertex table has one row for every densified point (about every 5 feet): its route, part, reference point, distance along the route, smoothed position and elevation, raw position and DEM elevation, grade from the regression of Eq. 5.8, unwrapped heading, structure labels, the source of the elevation (`Elev_Source`: the DEM, a span line, a deck measured from lidar, a gap line or the clearance floor; Section 5.2.11), roughness proxy, available sight distance, the curve type and class at the point, and the grade and grade class of its segment. The alignment tool also gives the functional class, the State, the HPMS IRI of the section, and the crossing fields (Chapter 7). Distance along the route is in miles (`Dist_Mi`) in the alignment tool and in feet (`Dist_Ft`) in the plan and profile tool.
 
 The vertex table of a whole State is large. The **Vertices Spatial File** option writes it as a GeoPackage of points, 50,000 rows at a time to limit memory use.
 
@@ -2018,7 +2031,7 @@ With the **Structure Span Report** option, both tools write a table with one row
 
 The alignment tool writes three interactive HTML maps on a light gray basemap:
 
-- **Curves** (`alignment_map_*.html`): horizontal curves colored by class, with compound curves dashed, and vertical curves colored by vertical curve class. Hovering over a horizontal curve shows its reference points, class, radius and smallest radius (feet), deflection angle, direction, length, transition (simple or spiral) and curve type (simple or compound). Hovering over a vertical curve shows its reference points, type, class, length, entering and leaving grades, algebraic difference, K value, design speed supported and sight distance provided. The map holds only these values; the full tables are in the CSV, GeoJSON and GeoPackage files (Appendix D).
+- **Curves** (`alignment_map_*.html`): horizontal curves colored by class, with compound curves dashed, and vertical curves colored by vertical curve class. Hovering over a horizontal curve shows its reference points, class, radius and smallest radius (feet), deflection angle, tangent length (feet), PI reference point, direction, length, transition (simple or spiral) and curve type (simple or compound). Hovering over a vertical curve shows its reference points, type, class, length, entering and leaving grades, algebraic difference, K value, design speed supported and sight distance provided. The map holds only these values; the full tables are in the CSV, GeoJSON and GeoPackage files (Appendix D).
 - **Grades** (`*_grades.html`): grade segments colored by signed grade, in reds for rising grades and blues for falling grades, darker for steeper classes, with class A in gray.
 - **Crossings** (`*_intersections.html`): one marker for each pair of crossing routes, in separate layers for at-grade crossings, grade-separated crossings, and crossings of unknown clearance.
 
@@ -2030,22 +2043,25 @@ The alignment tool writes an HTML dashboard with charts of the State's results: 
 
 ### 10.9 Plan and Profile Outputs
 
+**Begin and End RP.** Every record that overlaps the range is processed whole, so the smoothing and the curve fitting see the road beyond each limit. The outputs (the vertex, curve and grade tables, cross sections, nearby lines, structure spans, dashboards and PDF) are then limited to the range. A curve that crosses a limit is kept whole if its midpoint is inside the range, and dropped otherwise; the vertex table and the sheets run a short way past the limit to show a kept curve. Grade segments are cut at the ends of the vertex table.
+
+**Decreasing reference point direction.** A Begin RP greater than the End RP (for example 9.62 to 5.84) runs the route in the decreasing reference point direction. The route's chunks and their geometry are reversed before processing, so the road is processed in that direction of travel: left and right curves, cross-section sides, grade signs, superelevation and available sight distance are all for that direction. The tables list reference points in decreasing order (a curve's `Calibrated_Start_MP` is greater than its `Calibrated_End_MP`), and `Dist_Ft` (and the other distance columns) increases in the direction of travel, measured from the highest reference point processed. The `Part` column still gives each chunk's lowest reference point. The Run Log and the PDF cover page state the direction. Runs in the increasing direction are unchanged.
+
 Besides the tables above, the plan and profile tool writes:
 
 - **Cross-section tables**: one row per station with its measurements (Chapter 6), and the ground profile of each station every foot from 250 feet left to 250 feet right of the roadway centerline.
 - **Nearby lines**: the other HPMS lines near the route, with the crossing reference point and over/under label (Section 7.2).
 - **Run parameters** (JSON): the parameters the run used, read by the PDF tool for its cover page.
-- **Corridor analytics dashboard** (HTML): interactive charts along the route of the change in heading from point to point, the smoothed and raw elevation with points of available sight distance under the warning distance (Section 5.8), and the roughness proxy against the HPMS IRI (on separate axes, since the two are on different scales).
-- **Calibration cross-check** (HTML): the route check described in Section 9.7.
+- **Corridor analytics dashboard** (HTML): interactive charts along the route of the change in heading from point to point, the smoothed and raw elevation with points of available sight distance under the warning distance (Section 5.8), and the roughness proxy against the HPMS IRI (on separate axes, since the two are on different scales). In a decreasing reference point run the reference point axis runs from high to low, so the road reads left to right in the direction of travel. Zooming in refits the elevation axis to the points shown.
 
 ### 10.10 Plan and Profile Sheets
 
 The PDF tool (`apps/rat_plan_profile_report_pdf.py`) makes landscape sheets from the plan and profile tables:
 
-- **Cover page**: route, reference point range, run date, the speed limit entered (if any) and the sight distance warning distance, number of sheets, the records processed (county, facility types and owners), all run parameters, and an overview map on a USGS topographic basemap.
+- **Cover page**: route, reference point range (the Begin and End RP entered), direction (increasing or decreasing reference point), run date, the speed limit entered (if any) and the sight distance warning distance, number of sheets, the records processed (county, facility types and owners), all run parameters, and an overview map on a USGS topographic basemap.
 - **Terrain pages** (when the DEM tiles are cached): a shaded-relief map of the whole route with reference point labels and bridge and tunnel spans, and, for routes longer than 6 miles, section pages of 5 miles each.
-- **Plan and profile sheets**, each covering 1,500 feet of road. The plan view is at true scale, with the route turned to run left to right, on shaded relief from the DEM. It shows the smoothed centerline and the HPMS line, horizontal curves with call-outs (class, smallest radius, deflection, length, measured superelevation, and begin and end reference points), reference point ticks every 100 feet, cross-section stations, the nearby HPMS lines, a north arrow, a scale bar, and a locator map on USGS aerial imagery. The profile view shows the smoothed and raw profiles, vertical curves with call-outs (type, class, K, length, grades, sight distance and supported speed, and begin and end reference points), and a band marking points where the available sight distance is less than the warning distance (Section 5.8). An optional strip under the profile gives the profile and ground elevations at a set interval.
-- **Cross-section sheets**, four sections per sheet, at the same horizontal and vertical scale, each 500 feet wide and 50 feet tall. They show the ground, the lane slopes with arrows pointing downhill, foreslopes, the HPMS lines, and the measured superelevation of the curve each station belongs to.
+- **Plan and profile sheets**, each covering 1,500 feet of road in the direction of the run. The plan view is at true scale, with the route turned to run left to right in the direction of travel, on shaded relief from the DEM. It shows the smoothed centerline and the HPMS line, horizontal curves with call-outs (curve number, direction and class, PI reference point, deflection, radius, tangent length, length, measured superelevation, and begin and end reference points), each curve's PI marked with the tangents to it dashed, reference point ticks every 100 feet, cross-section stations, the nearby HPMS lines, a north arrow, a scale bar, and a locator map on USGS aerial imagery. The profile view shows the smoothed and raw profiles, vertical curves with call-outs (type, class, K, length, grades, sight distance and supported speed, and begin and end reference points), and a band marking points where the available sight distance is less than the warning distance (Section 5.8). An optional strip under the profile gives the profile and ground elevations at a set interval. In a decreasing reference point run the profile's reference point axis runs from high to low.
+- **Cross-section sheets**, four sections per sheet in the order of the run, each viewed looking in the direction of travel, at the same horizontal and vertical scale, each 500 feet wide and 50 feet tall. They show the ground, the lane slopes with arrows pointing downhill, foreslopes, the HPMS lines, and the measured superelevation of the curve each station belongs to.
 
 The options for these pages are in the CONFIGURATION block at the top of the PDF tool.
 
@@ -2055,9 +2071,8 @@ The 4D enrichment outputs are described in Section 8.5.
 
 ### 10.12 Logs and Reports
 
-- **Run Log**: the GUI shows the progress of each run and saves everything it shows to `Run_Log_<state>_<date>_v<n>.txt` in the State's output folder (the output folder itself for a run of all States). The log gives the records processed (county, facility types, functional systems and owners), the smoothing factors used, the bridge and tunnel spans found, the number of sag curves on bridges, the share of the network with available sight distance under 400 feet, and any warnings and errors. At the end of a run the GUI reports whether any errors were logged.
+- **Run Log**: the GUI shows the progress of each run and saves everything it shows to `Run_Log_<state>_<date>_v<n>.txt` in the State's output folder (the output folder itself for a run of all States). The log gives the processing settings that differ from their defaults (listed at the start of each run), the records processed (county, facility types, functional systems and owners), the smoothing factors used (each marked national or custom), the bridge and tunnel spans found, a line for each bridge deck measured from lidar or why lidar was not used there (Section 5.2.11), the number of sag curves on bridges, the share of the network with available sight distance under 400 feet, and any warnings and errors. At the end of a run the GUI reports whether any errors were logged.
 - **Validator report**: `qa_validation_report_<state>_<date>_v<n>.txt`, beside the files it checked (Chapter 11).
-- **Calibration outputs**: the factors file, the filled factors file, the audit table, and a run log (Section 9.5).
 
 ---
 
@@ -2080,7 +2095,7 @@ Each check either fails the file or gives a warning. A failure means the file is
 | Horizontal curves | A required column is missing (`RouteId`, `Start_Dist`, `End_Dist`, `Length_m`); a length of zero or less; an end distance not greater than the start distance | A radius of zero or less; a direction other than Left or Right; a class other than A to F |
 | Vertical curves | The same as for horizontal curves | A K value of zero or less; a type other than CREST or SAG; a vertical curve class other than A to F; a file from an earlier version with `Grade_Bin` and no `VC_Class` |
 | Grade segments | A required column is missing; a grade class other than A to F; an end distance not greater than the start distance; a length that differs from the distance between the ends by more than 0.1 foot; within any part of a route, a gap or overlap of more than 0.1 foot between consecutive segments | None |
-| Vertices | `RouteId` or `Milepost` is missing; a reference point that decreases from one vertex to the next within a part of a route | No `Part` column, so reference points are checked over the whole route |
+| Vertices | `RouteId` or `Milepost` is missing; reference points that reverse direction within a part of a route (they may decrease throughout, as in a decreasing reference point plan and profile run) | No `Part` column, so reference points are checked over the whole route |
 | Section scores | A required column is missing; an end reference point not greater than the begin; a missing or invalid class | None |
 | 4D output | No `WKT_ZM` column; no Z and M values can be read | Z values that are not numbers; records whose Z values are all zero; records whose M values are all zero; where RAT replaced the curve and grade fields (Section 8.4), `CURVES_A` to `CURVES_F` or `GRADES_A` to `GRADES_F` (in either case) that do not add up to the section length (within 0.0001 mile), with the first 10 such records listed (`MAX_LISTED_ROWS`, default 10). HPMS-reported values are not checked |
 | 4D output against section scores | More than 5 percent of the records in the section scores are missing from the 4D output (records matched by `RouteId`, `Start_MP`, and `End_MP`; `MAX_4D_MISSING_PCT`, default 5 percent) | Some records missing, up to 5 percent; 4D records that are not in the section scores (runs with different filters or input); RouteId, Start_MP, or End_MP missing from either file, so the records are not compared |
@@ -2114,10 +2129,13 @@ The methods were checked during development on runs of these routes, comparing t
 - a statewide run of Maryland, functional classes 1 to 3 (alignment and 4D enrichment), with a plan and profile run of Interstate 595 (U.S. 50);
 - the Parks Highway (Alaska Route 3) from the Glenn Highway west through Wasilla, both directions, where the inventory line follows an old alignment for several miles;
 - the Pikes Peak Highway in Colorado, functional class 7, the full 18.2 miles from about 7,700 feet to about 14,100 feet elevation, with sustained grades near 10 percent, many switchbacks, and one bridge;
-- a local road (functional class 7) in Iowa, 1.9 miles of rural grid with five turns of about 90 degrees, smoothed at factors of 30, 100, and 150 to check the departure limit of the calibration (Section 9.4);
+- a local road (functional class 7) in Iowa, 1.9 miles of rural grid with five turns of about 90 degrees, smoothed at factors of 30, 100, and 150 to check the smoothing at sharp turns;
 - a statewide run of Alaska, functional classes 1 to 6, with a plan and profile run of the Seward Highway from Seward to beyond Moose Pass, where the DEM is coarse and the structure records decide which spans are kept (Section 5.2.3);
 - Badwater Road in Death Valley, California, functional class 5, reference points 10.5 to 48.4, nearly all below sea level (lowest point about 274 feet below), on a valley floor flat enough that the ground beside the road was at first taken for an opposing roadway (Section 6.2);
-- a county run of Snohomish County, Washington (all functional classes; alignment, 4D enrichment and plan and profile runs), the first test of the county and ownership filters (Section 2.2.1).
+- a county run of Snohomish County, Washington (all functional classes; alignment, 4D enrichment and plan and profile runs), the first test of the county and ownership filters (Section 2.2.1);
+- the six as-built plan sets of Chapter 9 (Table C-1), used to choose the horizontal smoothing factor and the curve ends;
+- bridge decks from lidar (Section 5.2.11) on the Mount Hope, Jamestown, Newport and Washington bridges in Rhode Island, the Indian River Inlet Bridge in Delaware, the East Fork Lewis River bridge on Interstate 5 in Washington, and the bridge over the Missouri River at the State line on Interstate 80 in Iowa;
+- U.S. 44 in Providence, Rhode Island, where four short bridges on a sloping street tested the edge and bench rules of Sections 5.2.2 and 5.2.3.
 
 ### Part B: Known Limitations
 
@@ -2128,9 +2146,8 @@ The methods were checked during development on runs of these routes, comparing t
 - **Line off the road at a bridge and curve.** On route 700002800I in Snohomish County, Washington, the HPMS line crosses a short bridge (an NBI record) at reference point 11.83 and then cuts across the inside of a sharp right curve, off the road from about reference point 11.84 to 11.97. Along that stretch the ground at the line climbs at 10 to 15 percent and then dips about 8 feet. Because the ground beyond the bridge kept climbing steeply, the bridge's far edge ran about 220 feet up the slope, and the bridge was not spanned despite the NBI record. The dip was spanned as a bridge from the DEM alone (3_DIP) that is not there, and the two curves in the stretch describe the line, not the road. The three cross sections in the stretch found no lanes at the line (or only ground sloping 9 percent), and one of them shows a flat strip at road level 110 to 130 feet to the side, about 30 feet below the ground at the line. They were not flagged because the station test of Section 6.10 also needs the centerline to fall well away from its usual offset, or a divided-road centerline method, and on a two-lane road the centerline is placed within about 15 feet of the line; this is the same gap as on the Idaho forest roads above (see the Roadmap).
 - **Direction of the records.** RAT assumes that a State's submitted order runs in the direction of increasing reference point (Section 2.3.4). This held on every route tested.
 - **Gaps in the line work.** Records whose ends are up to 100 feet apart are joined, and chunks whose ends are up to 500 feet apart are joined (Section 2.3). A real gap of that size becomes a straight piece of line and can cause a step in the profile.
-- **Reference points.** Reference points are interpolated in a straight line between the lowest and highest reference points of each chunk (Eq. 4.14). Where a State's reference points do not advance evenly along the line, positions are shifted. On a Nebraska test the HPMS bridge limits fell 0.04 to 0.05 mile past the bridges in the DEM.
+- **Reference points.** Reference points are interpolated in a straight line between the lowest and highest reference points of each chunk (Eq. 4.18). Where a State's reference points do not advance evenly along the line, positions are shifted. On a Nebraska test the HPMS bridge limits fell 0.04 to 0.05 mile past the bridges in the DEM.
 - **Repeated reference points.** Section scores (Section 10.4) and the 4D curve and grade replacement (Section 8.4) match curves to HPMS sections by route and reference point. On a route whose reference points start over partway along, such as at a county line, curves from one part can be counted on a section of another part with the same reference points.
-- **One smoothing factor per chunk.** Each continuity chunk is smoothed with the factor for the functional class covering most of its length (Section 3.5.1). A short stretch of a different functional class within the chunk is smoothed with that factor.
 
 #### 11.5 Elevation Data
 
@@ -2139,19 +2156,25 @@ The methods were checked during development on runs of these routes, comparing t
 - **Structures not found.** A bridge or tunnel is repaired only if the DEM shows it as a gap or hump at least 3 feet deep with steep edges and a structure record of the same kind supports it, or, for a short bridge with no record, if both sides of the gap show a face (Section 5.2.3); or, for a bridge, if an HPMS record covers it and the ground under the record lies below the line between its ends (Section 5.2.7). A structure the DEM does not show that way is left in the profile. Where the DEM is coarse, as on much of the Seward Highway in Alaska, many short bridges show no gap and get no span; the profile there follows the DEM over the bridge. Steep sags and crests on short ramp-like routes of functional class 1 were seen in the Delaware run.
 - **Bridges with no record and gentle sides.** A bridge that has no HPMS record, and no NBI point within about 55 feet of the line, is found only if both sides of its gap rise or fall at least 3.5 feet within 15 feet. The smallest such bridge face seen in testing was 3.9 feet and the largest false one 3.4 feet, so a real bridge with lower sides is missed.
 - **HPMS bridge limits inside the gap.** A span placed along HPMS bridge records (Section 5.2.7) assumes that the record limits lie near the abutments. Where they fall on the slope or at the bottom of the gap, the road line used to move each end out is fitted partly over the slope, the end stops partway up, and the span can fail the ground test. A bridge with gentle sides and record limits inside the gap can then be missed.
-- **Bridge ends on steep approaches.** Where the approach grade differs sharply from the straight deck line, the profile can run 1 to 2 feet below the DEM before the abutment, giving a false steep grade and a sharp sag or crest (Section 5.2.10). Sags are flagged `False_Valley_Warning`; crests are not flagged. Class D, E, and F vertical curves and class D or steeper grades that touch a bridge end should be checked against the profile sheet.
-- **Bridge decks.** Every span is a straight line between its ends. The deck of a high bridge that rises toward a main span, such as the Newport Bridge in Rhode Island, is drawn lower than it is. Where a steep approach meets the straight deck, the profile can also form a crest that is not on the road: about 50 points at the west end of the Newport Bridge, where a 4.5 percent approach meets the deck, show available sight distance under 400 feet for this reason.
+- **Bridge ends on steep approaches.** Where no deck is measured from lidar and the approach grade differs sharply from the straight deck line, the profile can run 1 to 2 feet below the DEM before the abutment, giving a false steep grade and a sharp sag or crest (Section 5.2.10). Sags are flagged `False_Valley_Warning`; crests are not flagged. Class D, E, and F vertical curves and class D or steeper grades that touch a bridge end should be checked against the profile sheet.
+- **Bridge decks without lidar.** Where no deck is measured from lidar (a bridge shorter than 300 feet, lidar turned off or not available, or no deck points), a span is a straight line between its ends. The deck of a high bridge that rises toward a main span is then drawn lower than it is, and where a steep approach meets the straight deck the profile can form a crest that is not on the road: without lidar, about 50 points at the west end of the Newport Bridge in Rhode Island showed available sight distance under 400 feet for this reason.
+- **Bridge decks over open water.** Lidar surveys often have no points on a deck over open water. There the deck is a gap line, raised where needed to the navigation clearance floor (Section 5.2.11). It is not a measured deck: the crests of the main spans of the Mount Hope and Newport bridges are not measured, and the floor is a lower limit, since the NBI does not give the depth of the structure. Vertical curves and sight distance warnings on or next to these stretches are left out (Sections 5.5 and 5.8).
+- **Lidar downloads.** Lidar is downloaded for each bridge on the first run, and USGS limits how fast it can be requested. A single bridge took from about 6 to 17 minutes in testing, mostly waiting on whole USGS tiles. A project that cannot be downloaded is left out of that bridge's deck, and the Run Log names it; running again adds it from the cache.
 - **Bridges at the end of the data.** A bridge that runs off the end of a route's data, such as at a State line, is held level at the one abutment in the data (Section 5.2.6).
 
 #### 11.6 Horizontal Curves
 
-- **Radius at sharp corners.** The reported radius is the smallest radius in the curve (Eq. 4.10). At a right-angle turn on a street grid, the smoothed line turns the corner over a short distance, and the reported radius can be very small. In the Delaware run, 485 horizontal curves had radii under 25 feet, 456 of them on local roads. These are correct for the smoothed line but are corners, not designed curves.
-- **Smoothing and short curves.** Curves shorter than 100 feet, or turning less than 3.5 degrees, are not reported. Heavier smoothing, where the calibrated factor is high, can flatten short curves and reverse curves.
-- **Spirals and superelevation.** The spiral label (Section 4.4.2) describes the shape of the smoothed curve, not a designed spiral. Measured superelevation, from the plan and profile tool only, comes from a bare-earth surface model and is not available on bridges.
+- **Radius at sharp corners.** At a right-angle turn on a street grid, the smoothed line turns the corner over a short distance, and the radius (Eq. 4.10) can be very small. In the Delaware run, 485 horizontal curves had a smallest radius under 25 feet, 456 of them on local roads. These are correct for the smoothed line but are corners, not designed curves.
+- **Same-direction curves with a short tangent.** Two curves that turn the same way with a short tangent between them are split where the curvature of the smoothed line dips between them (Section 4.3). Where the smoothing has rounded the tangent into a curve nearly as sharp as the two arcs, they stay one curve, whose radius (Eq. 4.10) is then larger than that of either arc because the stretch it is measured over takes in the rounded tangent. On the Mt. Idaho Grade Road, where the as-built plans show tangents of 50 to 160 feet between same-direction curves, 9 of 10 such pairs stayed joined at the State's smoothing factor of 75 and 7 at a factor of 10. The HPMS line itself cannot show such tangents where its points are farther apart than the tangent (40 feet apart on average there and up to 190 feet within curves). Corrected centerline geometry would show them (Roadmap).
+- **Short and flat curves.** A curve whose measured run is shorter than 100 feet or turns less than 3.5 degrees, or whose length from PC to PT is under 25 feet, is not reported. Flat curves on Interstates often turn less than 3.5 degrees: on the Iowa plan sets, 2 of 4 plan curves on Interstate 80 eastbound and 1 of 3 on Interstate 380 were not reported for this reason. Lowering `H_MIN_DELTA` to 1.5 degrees found them, but it also added about 200 curves on the regression routes, mostly flat class A curves, and 3 of the 7 curves it added on the Idaho plan set were not on the plans.
+- **Short curves on winding roads.** On winding forest and mountain roads, the national factor of 30 finds more short curves, and more pairs of curves turning the same way close together, than the higher factors earlier versions used there (Section 9.2). Some pairs are real compound or broken-back curves and some are one curve split where the HPMS line wavers. Testing whether merging (Section 4.5) or a rule tied to the curve ends separates the two is listed in the Roadmap.
+- **Spirals.** RAT does not report spirals. A curve with spirals is reported as the circular curve that would replace them (Section 4.4.2), so it is shorter than the plans' length from the start of the first spiral to the end of the second, and its tangent length (Eq. 4.15) leaves out the spirals.
+- **Superelevation.** Measured superelevation, from the plan and profile tool only, comes from a bare-earth surface model and is not available on bridges.
 
 #### 11.7 Vertical Curves, Grades, and Sight Distance
 
-- **Design speed supported.** The vertical curve class considers the vertical curve only. It does not consider horizontal curves, roadside objects, or cut slopes that limit sight distance, and it assumes a symmetric parabolic curve fitted to the smoothed profile.
+- **Design speed supported.** The vertical curve class considers the vertical curve only. It does not consider horizontal curves, roadside objects, or cut slopes that limit sight distance, and it assumes a symmetric parabolic curve fitted to the smoothed profile (or, with the optional fit, to the profile before smoothing, Section 5.5.3).
+- **Vertical curve length.** The runs on which vertical curves are found are longer than the design curves, since the smoothing spreads each curve (Section 5.5.3), and the parabola's end slopes overshoot the tangent grades. The two errors partly cancel in $K$, and the classes matched the as-built plans of the Mt. Idaho Grade Road on 41 percent of curves (74 percent within one class). The optional design profile fit (Section 5.5.3) gives lengths, grades, and $K$ much closer to design on synthetic profiles, but on that road it did not class curves better, and on the regression routes 11 percent of its curves were at the 50-foot shortest length. Plan sets for roads whose profile has not changed since the lidar was collected, with crest curves of several classes, are needed to decide between them.
 - **Available sight distance.** The available sight distance (Section 5.8) is measured only in the direction of increasing reference point, over the vertical profile only, up to 1,500 feet. Unless the user enters a speed limit for a plan and profile run, the warning on the sheets and dashboards is a fixed 400 feet, not tied to the road's speed (Section 5.8). **Note:** The sight distance results should be treated as experimental and used with caution.
 - **Grade segments between close VPIs.** A short grade segment between two closely spaced VPIs reports the tangent grade, which can be steeper than the profile itself (Section 5.7). Short class F segments on mountain roads should be read with the vertex grades.
 - **Roughness proxy.** `Micro_Jitter_Inches` is a height in inches from the DEM residual, not an IRI value (Section 5.9). **Note:** The roughness proxy results should be treated as experimental and used with caution.
@@ -2166,7 +2189,7 @@ The methods were checked during development on runs of these routes, comparing t
 
 RAT results are estimates from mapped geometry and a bare-earth elevation model. They are suited to screening, inventory, and review of HPMS data, not to design or to decisions about a specific location without checking. `DISCLAIMER.md` gives the terms of use.
 
-Correcting the horizontal position of the HPMS line work with map matching against OpenStreetMap is listed as future work in the Roadmap.
+Correcting the horizontal position of the HPMS line work, with the methods developed for the National Road Network, is listed as future work in the Roadmap.
 
 ---
 
@@ -2201,7 +2224,7 @@ where:
 
 The horizontal line is fitted as two splines with the same $s$. The squared plan distance between a smoothed point and its data point is the sum of the squared easting and northing departures, so its mean is $2F/528$ and the RMS plan departure is $\sqrt{2F/528}$ m (Eq. 3.8).
 
-The departures are not spread evenly. They are larger where the spline cuts across a sharp change in direction or grade and smaller on long tangents and steady grades. This is why the calibration also limits the 99th percentile departure at curve points (Section 9.4).
+The departures are not spread evenly. They are larger where the spline cuts across a sharp change in direction or grade and smaller on long tangents and steady grades.
 
 ### A.2 Degree of Curve
 
@@ -2267,7 +2290,7 @@ L_v = \frac{|A|\,S^2}{200\left(\sqrt{h_1} + \sqrt{h_2}\right)^2} \quad (S < L_v)
 L_v = 2S - \frac{200\left(\sqrt{h_1} + \sqrt{h_2}\right)^2}{|A|} \quad (S > L_v) \qquad \text{(A.6)}
 $$
 
-With $h_1$ = 3.5 feet and $h_2$ = 2.0 feet, $200(\sqrt{3.5} + \sqrt{2.0})^2 = 2{,}158$. Solving each case for $S$ gives Eqs. 5.16 and 5.17.
+With $h_1$ = 3.5 feet and $h_2$ = 2.0 feet, $200(\sqrt{3.5} + \sqrt{2.0})^2 = 2{,}158$. Solving each case for $S$ gives Eqs. 5.18 and 5.19.
 
 **Sag curves**, for headlight height $h_3$ and an upward beam angle $\alpha$:
 
@@ -2288,7 +2311,7 @@ where:
 | $h_3$ | height of the headlights, 2.0 ft |
 | $\alpha$ | upward divergence of the headlight beam, 1 degree |
 
-With $h_3$ = 2.0 feet and $\alpha$ = 1 degree, $200(h_3 + S\tan\alpha) = 400 + 3.49S$, taken as $400 + 3.5S$. The first case becomes $|A| S^2 - 3.5 L_v S - 400 L_v = 0$, whose positive root is Eq. 5.18. The second becomes $S(2|A| - 3.5) = |A| L_v + 400$, which is Eq. 5.19 and has no positive solution when $2|A| \le 3.5$.
+With $h_3$ = 2.0 feet and $\alpha$ = 1 degree, $200(h_3 + S\tan\alpha) = 400 + 3.49S$, taken as $400 + 3.5S$. The first case becomes $|A| S^2 - 3.5 L_v S - 400 L_v = 0$, whose positive root is Eq. 5.20. The second becomes $S(2|A| - 3.5) = |A| L_v + 400$, which is Eq. 5.21 and has no positive solution when $2|A| \le 3.5$.
 
 In each case RAT first solves for $S$ assuming $S < L_v$ and uses the $S > L_v$ form if the result is longer than the curve.
 
@@ -2310,19 +2333,6 @@ The symbols are those of Eqs. 4.5 to 4.7:
 | $j, k$ | states at point $i$ and at point $i-1$ |
 | $N$ | number of points in the chunk |
 
-### A.6 Sample Size
-
-Cochran's sample size for estimating a proportion $p$ within a margin $B$ at a given confidence level is $n_0 = Z^2 p(1-p)/B^2$, where $Z$ is the standard normal value for that confidence level. For a finite population of $N_{pop}$ units, the finite population correction gives $n = n_0/\bigl(1 + (n_0 - 1)/N_{pop}\bigr)$ (Eq. 9.1). For a variable with several classes, replacing $p(1-p)$ by its largest value over the classes (Eq. 9.2) gives a sample large enough to estimate the share of each class within $B$. The largest possible value, 0.25, occurs at $p = 0.5$; with $Z$ = 1.960 and $B$ = 0.05 it gives $n_0 = 384.2$.
-
-| Symbol | Meaning |
-| :--- | :--- |
-| $n_0$ | sample size for an infinite population |
-| $n$ | sample size with the finite population correction |
-| $Z$ | standard normal value for the confidence level, 1.960 for 95 percent |
-| $p$ | proportion being estimated |
-| $B$ | margin of error, 0.05 |
-| $N_{pop}$ | number of units in the population |
-
 ---
 
 ## Appendix B: Default Parameters
@@ -2335,12 +2345,13 @@ Table B-1 lists the parameters a user can change, with their defaults. "GUI" mea
 | :--- | :--- | :--- | :--- | :--- |
 | `DENSIFY_SPACING_FT` | 5 ft | GUI | Target point spacing | 3.2 |
 | `H_MIN_CHUNK_POINTS` | 23 | Core | Fewest densified points for a chunk to be processed (at least 8) | 3.2 |
-| `H_SMOOTH_FACTOR`, `H_SMOOTH_FACTOR_FS2` to `_FS7` | State values, or Table 3-2 | GUI | Horizontal smoothing factor by functional class | 3.5 |
+| `H_SMOOTH_FACTOR` | 30 | GUI | Horizontal smoothing factor (all States and functional classes) | 3.5.1 |
 | `V_SMOOTH_FACTOR` | 10 | GUI | Vertical smoothing factor (all States and functional classes) | 3.5.2 |
 | `H_USE_HMM_CLASSIFICATION` | True | GUI | Viterbi labeling of horizontal curves | 4.2.2 |
 | `H_HMM_STICKINESS` | 1.0 | GUI | Cost of a change of state, horizontal | 4.2.2 |
 | `H_MAX_RADIUS_FT` | 165,000 ft | GUI | Flattest curve reported; sets the curvature threshold | 4.2.1 |
-| `H_MIN_CURVE_LENGTH_FT` | 100 ft | GUI | Shortest horizontal curve reported | 4.3 |
+| `H_MIN_CURVE_LENGTH_FT` | 100 ft | GUI | Shortest measured run kept as a horizontal curve | 4.3 |
+| `H_MIN_PCPT_LENGTH_FT` | 25 ft | GUI | Shortest horizontal curve reported, PC to PT | 4.4.2 |
 | `H_MIN_DELTA` | 3.5 degrees | GUI | Smallest deflection angle reported | 4.3 |
 | `TRIM_CURVE_ENDPOINTS` | True | GUI | Trim weak points from curve ends | 4.3, 5.5.1 |
 | `ENABLE_MERGE` | False | GUI | Join same-direction horizontal curves into compound curves | 4.5 |
@@ -2353,6 +2364,7 @@ Table B-1 lists the parameters a user can change, with their defaults. "GUI" mea
 | `V_MIN_CURVE_LENGTH_FT` | 200 ft | GUI | Shortest vertical curve reported | 5.5.1 |
 | `V_MIN_GRADE_CHANGE` | 0.5 % | GUI | Smallest algebraic difference reported | 5.5.2 |
 | `V_MIN_OFFSET_FT` | 0.10 ft | GUI | Smallest middle ordinate reported | 5.5.2 |
+| `V_FIT_DESIGN_PROFILE` | False | Core | Fit vertical curve geometry as a design profile | 5.5.3 |
 | `REGRESSION_WINDOW_FT` | 500 ft | GUI | Half-width of the vertex grade regression | 5.4 |
 | `DIP_THRESHOLD_FT` | 3 ft | GUI | Smallest edge height and span depth | 5.2.2, 5.2.3 |
 | `STRUCTURE_EDGE_GRADE_PCT` | 10 % | GUI | Grade that marks an edge | 5.2.2 |
@@ -2360,10 +2372,12 @@ Table B-1 lists the parameters a user can change, with their defaults. "GUI" mea
 | `BRIDGE_RECORD_MAX_LEN_FT` | 30,000 ft | Core | Longest span placed along HPMS bridge records | 5.2.7 |
 | `TUNNEL_MAX_LEN_FT` | 10,000 ft | GUI | Longest tunnel span | 5.2.3 |
 | `STRUCTURE_MATCH_TOL_FT` | 300 ft | GUI | Distance within which a record labels a span | 5.2.6 to 5.2.8 |
+| `USE_LIDAR_BRIDGE_DECKS` | True | GUI | Measure bridge decks from lidar | 5.2.11 |
+| `LIDAR_MIN_SPAN_FT` | 300 ft | Core | Shortest bridge span whose deck is measured from lidar | 5.2.11 |
 | `CHUNK_JOIN_TOLERANCE_FT` | 100 ft | GUI | Largest gap joined between records | 2.3.1 |
 | `MAX_CHUNK_SPLIT_MILES` | 25 mi | GUI | Longest chunk processed as one task | 2.7 |
 | `CHUNK_SPLIT_PADDING_FT` | 20,000 ft | GUI | Extra line on each side of a split piece | 2.7 |
-| `LOG_FSYSTEM_DETAIL` | False | Core | List each chunk's functional class in the Run Log | 3.5.1 |
+| `LOG_FSYSTEM_DETAIL` | False | Core | List each chunk's functional class (for the default reference speed) in the Run Log | 3.5.1 |
 | `COUNTY_FIPS` | Blank | GUI, 4D tool | County processed (three-digit code); blank for the whole State | 2.2.1 |
 | `OWNERSHIP_FILTER` | All owners | GUI, 4D tool | HPMS Ownership codes processed; empty for every record | 2.2.1 |
 | `OWNERSHIP_INCLUDE_MISSING` | False | GUI, 4D tool | Also process records with no ownership when owners are selected | 2.2.1 |
@@ -2380,14 +2394,16 @@ Table B-2 lists fixed values in the code that a user would not normally change.
 | Name | Value | Use | Section |
 | :--- | :--- | :--- | :--- |
 | `SMOOTH_REF_POINTS` | 528 | Points per mile at 10-ft spacing; scales the smoothing factor | 3.3.1 |
-| `NATIONAL_DEFAULTS` | Table 3-2 | Horizontal factors where no State value exists | 3.5.1 |
+| `NATIONAL_H_SMOOTH_FACTOR` | 30 | National horizontal factor | 3.5.1 |
 | `NATIONAL_V_SMOOTH_FACTOR` | 10 | National vertical factor | 3.5.2 |
 | Edge grouping distance | 25 ft | Steep points this close form one edge | 5.2.2 |
 | Road fit length | 50 ft | Fit for span end elevations | 5.2.3 |
 | Span interior share | 90 % | Share of points on the gap or hump side | 5.2.3 |
 | Outside grade check | 150 ft, 15 % | Ground beyond a span end must be road | 5.2.3 |
 | Maximum span grade | 15 % | Steepest deck or tunnel | 5.2.3 |
+| Edge trim | 25 ft to an opposite edge; 30 %; 100 ft | Gentle stretch of road left out of an edge next to an opposite edge | 5.2.2 |
 | Bench distance | 200 ft | Second edge this close beyond a bridge end means a bench | 5.2.3 |
+| Bench by height | `DIP_THRESHOLD_FT`; a record of about the span's own length | Ground beyond the farther step no higher than this: not a bench | 5.2.3 |
 | Road before a bench | 100 ft | Ground this long before an edge stepping back means the next edge is another structure | 5.2.3 |
 | Further edges tried | 40 each side | Wider pairings tested | 5.2.4 |
 | Grade match improvement | 2 percentage points | Needed for a wider pairing to replace a narrower one | 5.2.4 |
@@ -2396,7 +2412,8 @@ Table B-2 lists fixed values in the code that a user would not normally change.
 | End of the data | 50 ft, 150 ft | An edge reaching this close to an end of the profile, with no more than this beyond it, is held level | 5.2.6 |
 | Record support | Same kind; 300 ft (`STRUCTURE_MATCH_TOL_FT`) beyond the record at each end; record runs joined across 100 ft | Span a structure record supports | 5.2.3 |
 | Span with no record | Bridges only; 600 ft; 3.5 ft rise or fall between points 15 ft apart at both ends, searched 60 ft outside to 150 ft inside | Short bridge found from its faces | 5.2.3 |
-| Span weight | 100, reached 200 ft inside the span | Spline weights on spans | 5.2.9 |
+| Span weight | 100, reached 200 ft inside the span | Spline weights on span lines (not on lidar decks, gap lines or the clearance floor) | 5.2.9 |
+| Lidar | Table B-4 | Bridge decks from lidar | 5.2.11 |
 | NBI/NTI match distance | 0.00015 degree (16.7 m) | Structure point near the line | 5.2.8 |
 | `SSD_TABLE_FT` | Table 5-1 | Stopping sight distance by design speed | 5.6.2 |
 | `VC_CLASS_MIN_SPEED_MPH` | A 70, B 60, C 50, D 40, E 30 mph | Vertical curve class limits | 5.6.2 |
@@ -2404,7 +2421,12 @@ Table B-2 lists fixed values in the code that a user would not normally change.
 | Sight distance | 3.5 ft eye, 2.0 ft object, 1,500 ft | Available sight distance | 5.8 |
 | `SIGHT_WARNING_FT` | 400 ft | Sight distance warning where no speed limit is entered | 5.8 |
 | Roughness filter | 30 m cutoff and window | Roughness proxy | 5.9 |
-| Spiral test | 85 % of peak curvature, 150 ft | Spiral label | 4.4.2 |
+| Curvature dip split | 0.35 of the smaller peak on either side | Splitting same-direction curves | 4.3 |
+| Arc radius | 60 % of the deflection angle | Reported radius and curve class | 4.3 |
+| `H_END_CURVATURE_FRACTION` | 0.5 | Share of the arc curvature at the PC and PT | 4.4.2 |
+| `V_FIT_MIN_LENGTH_FT`, `V_FIT_SWEEPS` | 50 ft, 3 | Shortest fitted vertical curve; passes over the VPIs | 5.5.3 |
+| Starting vertical curve length | 60 % of the grade change, half the central rate | Design profile fit | 5.5.3 |
+| PI deflection limit | 170 degrees | No PI or tangent length at or above it | 4.4.3 |
 | Crossing search radius | 0.000045 degree | Network crossings | 7.1 |
 | Crossing classes | 5 ft, 10 ft | At-grade and grade-separated limits | 7.1 |
 | Over/under | 30 degrees, 30 ft, 150 ft, 60 to 150 ft, 15 ft | Nearby line crossings | 7.2.2 |
@@ -2441,91 +2463,72 @@ Table B-2 lists fixed values in the code that a user would not normally change.
 | Line off road | 25 ft (not used where the centerline comes from methods 1 to 5), 8 %, 2 stations | `Line_Off_Road` station test |
 | Ground roughness | 50 ft median window, 0.2 ft over 300 ft, 100 ft from record-backed structures, 100 ft of ground | `Line_Off_Road` ground test |
 
-The calibration tool's settings are in its own CONFIGURATION block (Table B-4).
+Table B-4 lists the values used for bridge decks from lidar, set near the top of `core/rat_lidar.py`.
 
-**Table B-4. Calibration settings (`tools/rat_national_calibration.py`)**
+**Table B-4. Lidar values (`core/rat_lidar.py`)**
 
-| Setting | Value | Section |
+| Name | Value | Use |
 | :--- | :--- | :--- |
-| `INCLUDE_MISSING_FSYSTEM` | False | 9.2 |
-| `INCLUDE_MISSING_FACILITY` | False | 9.2 |
-| `N_REPEATS_PER_STATE` | 5 | 9.5 |
-| `MIN_CONVERGED_FRACTION` | 0.5 | 9.5 |
-| `MIN_FOR_DROP_ONE` | 4 | 9.5 |
-| `DROP_FRACTION` | 0.20 | 9.5 |
-| `MAX_SPREAD_RATIO` | 1.0 | 9.5 |
-| `VITERBI_S_GRID` | Table 9-1 | 9.3 |
-| `VITERBI_GAP_BRIDGE_M` | 150 m | 9.3 |
-| `VITERBI_STABILITY_THRESHOLD_BY_FS` | 0.90 (FS 1 to 2), 0.85 (FS 3 to 7) | 9.3 |
-| `FIXED_DURABLE_WINDOW` | 8 transitions | 9.3 |
-| `VITERBI_MAX_SELECTABLE_S` | 2,000 | 9.3 |
-| `MAX_DEPARTURE_P99_FT` | 6.0 ft | 9.4 |
-| Densify spacing (`BASE_ENGINE_PARAMS`) | 10 ft | 9.3 |
-| Cochran confidence, margin | 95 %, 0.05 | 9.2 |
-| `MIN_PANELS_FOR_STATE_ESTIMATE` (curve shares) | 10 | 9.2 |
+| `LIDAR_WINDOW_PAD_FT`, `LIDAR_WINDOW_HALF_WIDTH_FT` | 300 ft, 60 ft | Window read around each span |
+| `LIDAR_MAX_PROJECTS` | 3 | Projects read per window, newest first |
+| `LIDAR_EPT_RESOLUTION_M` | 0.5 m | Point spacing read from the Amazon copy |
+| `LIDAR_MAX_TILE_MB` | 600 MB | Largest total of whole USGS tiles read for a project |
+| `LIDAR_KEEP_RAW_TILES` | True | Keep whole USGS tiles in the cache |
+| `LIDAR_TILE_PAUSE_S`, `LIDAR_TNM_PAUSE_S` | 5 s, 1 s | Spacing of requests, across all workers |
+| `PACER_MAX_PAUSE_S`, `PACER_EASE_AFTER_S` | 60 s, 5 min | Longest spacing after refusals; time after which it halves |
+| `LIDAR_DECK_HALF_WIDTH_FT` | 20 ft | Deck points this close to the line |
+| `LIDAR_ABOVE_GROUND_FT` | 3 ft | Unclassified points this far above the DEM taken as deck |
+| `LIDAR_BIN_FT`, `LIDAR_BIN_OUTLIER_FT`, `LIDAR_MIN_BIN_POINTS` | 25 ft, 3 ft, 5 | Deck bins |
+| `LIDAR_SPIKE_FT` | 2 ft | Bin dropped this far from its neighbors |
+| `LIDAR_GROUND_OFFSET_FT`, `LIDAR_MIN_GROUND_POINTS`, `LIDAR_DATUM_MAX_FT` | 6 ft, 30, 3 ft | Check of a project's ground against the DEM |
+| `LIDAR_END_CHECK_FT`, `LIDAR_END_MATCH_FT` | 150 ft, 5 ft | Measured deck must meet the span ends |
+| `LIDAR_MAX_INTERP_FT` | 100 ft | Longest stretch joined as measured deck |
+| `LIDAR_GRADE_FIT_FT`, `LIDAR_MAX_GRADE` | 200 ft, 15 % | Approach grade carried to the clearance floor |
+| Unmeasured deck margin | 200 ft | Vertical curves and sight warnings left out near gap lines and the floor |
+| `LIDAR_MAX_NETWORK_FAILURES`, `LIDAR_RETRY_WAIT_S` | 3, 120 s | Lidar off after this many failures in a row; wait before a throttled bridge is retried |
+| `LIDAR_TNM_EMPTY_RETRIES`, `LIDAR_TNM_EMPTY_WAIT_S` | 3, 20 s | An empty listing is asked again |
+| `LOCK_STALE_S` | 3,600 s | A lock file this old (or left by a process that has ended) is cleared |
 
 ---
 
-## Appendix C: National Horizontal Smoothing Factors
+## Appendix C: Smoothing Factor Tests Against As-Built Plans
 
-Table C-1 gives the horizontal smoothing factors in `core/national_smoothing_factors.json`, from the national calibration of October 27, 2026 (Chapter 9). Cells that the calibration left blank have been filled as described in Section 9.5. A dash means the file has no value for that functional class; the national default (Table 3-2) is used there.
+Table C-1 lists the as-built plan sets used to choose the horizontal smoothing factor and the curve ends (Chapter 9). Tables C-2 and C-3 give the results by plan set and factor, with curve ends set as in Section 4.4.2 and curves turning less than 3.5 degrees not reported. Each cell gives the median over the plan curves matched one to one with a RAT curve; the number matched is in parentheses in Table C-2.
 
-**Table C-1. Horizontal smoothing factors by State and functional class**
+**Table C-1. As-built plan sets**
 
-| FIPS | State | FS 1 | FS 2 | FS 3 | FS 4 | FS 5 | FS 6 | FS 7 |
-| :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 01 | Alabama | 15 | 50 | 10 | 10 | 75 | 30 | 100 |
-| 02 | Alaska | 10 | – | 10 | 10 | 10 | 10 | 75 |
-| 04 | Arizona | 40 | 100 | 10 | 30 | 75 | 75 | 100 |
-| 05 | Arkansas | 75 | 150 | 10 | 30 | 30 | 100 | 75 |
-| 06 | California | 100 | 100 | 100 | 100 | 75 | 30 | 100 |
-| 08 | Colorado | 150 | 100 | 30 | 15 | 30 | 100 | 100 |
-| 09 | Connecticut | 75 | 10 | 30 | 10 | 10 | 10 | 10 |
-| 10 | Delaware | 75 | 30 | 30 | 100 | 75 | 10 | 75 |
-| 11 | District of Columbia | 75 | 100 | 75 | 30 | 30 | – | 50 |
-| 12 | Florida | 75 | 150 | 10 | 10 | 30 | 15 | 75 |
-| 13 | Georgia | 100 | 100 | 30 | 75 | 100 | 100 | 100 |
-| 15 | Hawaii | 150 | 100 | 10 | 5 | 5 | 10 | 10 |
-| 16 | Idaho | 150 | 150 | 15 | 30 | 75 | 30 | – |
-| 17 | Illinois | 75 | 75 | 75 | 100 | 100 | 75 | 75 |
-| 18 | Indiana | 75 | 100 | 100 | 100 | 100 | 75 | 75 |
-| 19 | Iowa | 150 | – | 75 | 100 | 100 | 100 | 100 |
-| 20 | Kansas | 150 | 150 | 30 | 30 | 75 | 75 | 75 |
-| 21 | Kentucky | 30 | 15 | 10 | 10 | 10 | 10 | 10 |
-| 22 | Louisiana | 150 | 100 | 15 | 15 | 30 | 10 | 100 |
-| 23 | Maine | 150 | 100 | 30 | 100 | 75 | 30 | 100 |
-| 24 | Maryland | 30 | 40 | 10 | 15 | 30 | 10 | 10 |
-| 25 | Massachusetts | 30 | 30 | 100 | 30 | 30 | 15 | 100 |
-| 26 | Michigan | 150 | 150 | 100 | 100 | 100 | 75 | 75 |
-| 27 | Minnesota | 100 | 100 | 75 | 100 | 75 | 75 | 75 |
-| 28 | Mississippi | 75 | 100 | 30 | 10 | 10 | 10 | 30 |
-| 29 | Missouri | 100 | 100 | 100 | 100 | 100 | 75 | 75 |
-| 30 | Montana | 15 | – | 15 | 15 | 10 | 15 | 15 |
-| 31 | Nebraska | 15 | 150 | 15 | 75 | 75 | 75 | 75 |
-| 32 | Nevada | 40 | 100 | 10 | 10 | 10 | 30 | 75 |
-| 33 | New Hampshire | 150 | 100 | 10 | 10 | 10 | 10 | 15 |
-| 34 | New Jersey | 15 | 15 | 30 | 75 | 100 | 100 | – |
-| 35 | New Mexico | 100 | 100 | 75 | 75 | 75 | 75 | 75 |
-| 36 | New York | 30 | 30 | 30 | 30 | 30 | 15 | 30 |
-| 37 | North Carolina | 75 | 150 | 30 | 75 | 100 | 30 | 15 |
-| 38 | North Dakota | 15 | – | 30 | 15 | 15 | – | 75 |
-| 39 | Ohio | 15 | 10 | 30 | 100 | 15 | 10 | 75 |
-| 40 | Oklahoma | 30 | 30 | 30 | 75 | 75 | 75 | 75 |
-| 41 | Oregon | 100 | 100 | 30 | 30 | 30 | 30 | 75 |
-| 42 | Pennsylvania | 150 | 100 | 75 | 10 | 15 | 15 | 75 |
-| 44 | Rhode Island | 30 | 100 | 100 | 100 | 100 | 30 | 75 |
-| 45 | South Carolina | 150 | 100 | 100 | 75 | 75 | 75 | 75 |
-| 46 | South Dakota | 75 | 150 | 15 | 15 | 75 | 75 | 75 |
-| 47 | Tennessee | 15 | 100 | 10 | 10 | 10 | 10 | 10 |
-| 48 | Texas | 75 | 100 | 75 | 75 | 30 | 30 | 75 |
-| 49 | Utah | 100 | 75 | 75 | 30 | 30 | 30 | 30 |
-| 50 | Vermont | 5 | 100 | 10 | 10 | 10 | 10 | 10 |
-| 51 | Virginia | 75 | 75 | 15 | 15 | 10 | 10 | 10 |
-| 53 | Washington | 20 | 100 | 10 | 10 | 30 | 30 | 100 |
-| 54 | West Virginia | 30 | 100 | 15 | 15 | 10 | 10 | 10 |
-| 55 | Wisconsin | 30 | 30 | 15 | 30 | 75 | 50 | 20 |
-| 56 | Wyoming | 10 | 100 | 5 | 10 | 10 | 15 | 75 |
-| 72 | Puerto Rico | 150 | 150 | 75 | 30 | 30 | 30 | 75 |
+| Plan set | HPMS route and reference points | Plans | Curves | How the plan curves were placed |
+| :--- | :--- | :--- | :--- | :--- |
+| OR 140 | 27000I00, 56.70 to 59.00 | Federal Lands Highway, OR DOT 140(1), completed 2025 | 9 (8 with spirals) | Reference points from the plans |
+| WFL Idaho | 05760AOH000, 9.618 to 5.840 (decreasing) | Federal Lands Highway, Mt. Idaho Grade Road, NF 17(1) | 54 (mostly simple) | Station ties |
+| I-80 WB | S001910080W, 51.2 to 56.3 (facility type 6) | Iowa DOT IM-NHS-080-7(128)251 | 3 in the section, circular | PC and PT coordinates, Iowa Regional Coordinate System zone 10 |
+| I-80 EB | S001910080E, 236.8 to 239.5 | Iowa DOT NHS-080-6(372)239 | 3, circular | Half-deflection point of the RAT curve |
+| I-380 NB | S001910380N, 3.0 to 6.3 | Iowa DOT IM-NHS-380-6(393)3 | 3, circular | Half-deflection point of the RAT curve |
+| I-35 NB | S001910035N, 63.6 to 60.2 (decreasing) | Iowa DOT IM-NHS-035-2(510)61 | 2 in the section, circular | Half-deflection point of the RAT curve |
+
+**Table C-2. Median RAT curve length / plan length, by plan set and horizontal smoothing factor (curves matched)**
+
+| Plan set | F = 10 | F = 20 | F = 30 | F = 50 | F = 75 | F = 150 |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| OR 140 | 0.76 (7) | 0.67 (7) | 0.75 (8) | 0.80 (8) | 0.88 (7) | 0.88 (9) |
+| WFL Idaho | 0.87 (32) | 0.86 (46) | 0.88 (48) | 0.92 (47) | 0.86 (48) | 0.90 (47) |
+| I-80 WB | 0.69 (3) | 0.96 (3) | 0.96 (3) | 0.97 (3) | 0.49 (3) | 0.82 (3) |
+| I-80 EB | 0.47 (1) | 0.53 (1) | 0.54 (1) | 1.62 (1) | 1.99 (1) | 2.08 (1) |
+| I-380 NB | 0.82 (2) | 0.96 (2) | 0.95 (2) | 0.97 (2) | 0.97 (2) | 0.97 (2) |
+| I-35 NB | 0.80 (2) | 0.96 (2) | 0.99 (2) | 1.22 (2) | 1.33 (2) | 1.46 (2) |
+
+**Table C-3. Median distance of the RAT PC / PT from the plan PC / PT (ft), by plan set and horizontal smoothing factor**
+
+| Plan set | F = 10 | F = 20 | F = 30 | F = 50 | F = 75 | F = 150 |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| OR 140 | 182/83 | 170/63 | 114/122 | 118/120 | 131/110 | 141/90 |
+| WFL Idaho | 72/53 | 63/62 | 64/57 | 62/68 | 67/61 | 66/67 |
+| I-80 WB | 255/150 | 90/130 | 90/155 | 130/165 | 510/170 | 125/160 |
+| I-80 EB | 244/109 | 234/79 | 234/74 | 221/191 | 346/311 | 376/346 |
+| I-380 NB | 219/194 | 77/64 | 89/56 | 64/71 | 47/64 | 36/44 |
+| I-35 NB | 112/89 | 65/90 | 4/37 | 101/111 | 156/158 | 218/223 |
+
+On Interstate 80 eastbound, the one curve compared (PI 579+28, length 667 feet, deflection 4.4 degrees) is a short, flat curve. At factors of 30 and below RAT reports it at about half its plan length; at 50 and above, 1.6 to 2.1 times. The other two plan curves on that section turn less than 3.5 degrees and are not reported. On Oregon Route 140, 8 of the 9 curves have spirals, and RAT's lengths are shorter than the plans' lengths from the start of the first spiral to the end of the second (Section 4.4.2).
 
 ---
 
@@ -2539,18 +2542,20 @@ Distances (`_Dist`) are in meters along the route, on the basis of Eq. 2.3 (zero
 | :--- | :--- |
 | `RouteId` | HPMS route identifier |
 | `Part` (A) | Continuity chunk: its lowest reference point |
-| `FSystem` (A) | Functional class used for the chunk's smoothing factor |
+| `FSystem` (A) | Functional class covering most of the chunk (sets the default reference speed) |
 | `Curve_No` (P) | Curve number used on the sheets |
-| `Start_Dist`, `End_Dist` | Start and end of the curve along the route (m) |
-| `SC_Dist`, `CS_Dist` | Start and end of the central circular part (m) (Section 4.4.2) |
-| `Calibrated_Start_MP`, `Calibrated_End_MP` | Start and end reference points (Eq. 4.14) |
-| `Length_m`, `Length_ft` | Curve length (Eq. 4.8) |
-| `Radius_m`, `Radius_ft` | Radius: the smallest radius in the curve, or for a compound curve the length-weighted average of its parts (Eqs. 4.10, 4.13) |
-| `Min_Radius_m` | Smallest radius in the curve (m) |
-| `Delta` | Deflection angle (degrees) (Eq. 4.9) |
+| `Start_Dist`, `End_Dist` | PC and PT of the curve along the route (m) (Eq. 4.12) |
+| `Run_Start_Dist`, `Run_End_Dist` | Start and end of the curve's measured run along the route (m) (Section 4.3) |
+| `Calibrated_Start_MP`, `Calibrated_End_MP` | PC and PT reference points (Eq. 4.18) |
+| `Length_m`, `Length_ft` | Curve length, PC to PT (Eq. 4.13) |
+| `Radius_m`, `Radius_ft` | Radius of the curve's main arc, measured over the whole curve for a compound curve (Eqs. 4.10, 4.17) |
+| `Min_Radius_m` | Smallest radius in the curve, at its point of greatest curvature (m) |
+| `Delta` | Deflection angle over the measured run (degrees) (Eq. 4.9) |
+| `PI_Dist` | Point of intersection: the start of the measured run plus the distance to the PI along the start tangent (m) (Eq. 4.14); blank at 170 degrees or more |
+| `PI_MP` | Point of intersection as a reference point (Eq. 4.18) |
+| `Tangent_ft` | Tangent length of a circular curve with the curve's radius and deflection angle (ft) (Eq. 4.15) |
 | `Dir` | Left or Right, for travel in the direction of increasing reference point |
-| `Bin` | Curve class A to F from the degree of curve of the smallest radius (Table 1-1) |
-| `Transition_Type` | Simple or Spiral (Section 4.4.2) |
+| `Bin` | Curve class A to F from the degree of curve of the radius (Table 1-1) |
 | `Merge_Status` | Simple, or Compound for joined curves (Section 4.5) |
 | `Superelevation_Meas_Pct` (P) | Measured superelevation (Section 6.8) |
 | `Superelevation_Note` (P) | NC (normal crown), Structure, or blank |
@@ -2565,15 +2570,16 @@ Distances (`_Dist`) are in meters along the route, on the basis of Eq. 2.3 (zero
 | Column | Meaning |
 | :--- | :--- |
 | `RouteId`, `Part`, `FSystem` | As in D.1 (`Part` and `FSystem` in both tools) |
-| `Start_Dist`, `End_Dist` | Start and end of the curve (m) |
+| `Start_Dist`, `End_Dist` | Start (PVC) and end (PVT) of the curve (m) |
+| `Run_Start_Dist`, `Run_End_Dist` | Run the curve was found on (m), with `V_FIT_DESIGN_PROFILE` True (Section 5.5.3) |
 | `Calibrated_Start_MP`, `Calibrated_End_MP` | Start (PVC) and end (PVT) reference points |
 | `Length_m`, `Length_ft` | Curve length |
-| `Grade_In`, `Grade_Out` | Grades entering and leaving the curve (%) (Eq. 5.11) |
+| `Grade_In`, `Grade_Out` | Grades entering and leaving the curve (%) (Eq. 5.11, or Section 5.5.3) |
 | `Alg_Diff` | Algebraic difference in grade, $G_2 - G_1$ (%) (Eq. 5.12) |
 | `K_Value` | Length per percent of grade change (ft/%) (Eq. 5.13) |
 | `Type` | CREST or SAG |
 | `E` | Middle ordinate (m) (Eq. 5.14) |
-| `VPI_Dist`, `VPI_Elev_Ft` | Vertical point of intersection (Eq. 5.15) |
+| `VPI_Dist`, `VPI_Elev_Ft` | Vertical point of intersection (Eq. 5.15, or 5.16) |
 | `SSD_Provided_Ft` | Stopping sight distance the curve provides (ft); blank where not limited (Section 5.6.1) |
 | `Design_Speed_Supported_Mph` | Highest design speed supported (0 = below 15 mph, 80 = 80 mph or more) |
 | `VC_Class` | Vertical curve class A to F (Table 5-2) |
@@ -2590,7 +2596,7 @@ Distances (`_Dist`) are in meters along the route, on the basis of Eq. 2.3 (zero
 | `Start_Dist`, `End_Dist` | Start and end of the segment (m) |
 | `Calibrated_Start_MP`, `Calibrated_End_MP` | Start and end reference points |
 | `Length_ft` | Segment length (ft) |
-| `Grade_Pct` | Signed grade (%), positive rising in the direction of increasing reference point (Eq. 5.20) |
+| `Grade_Pct` | Signed grade (%), positive rising in the direction of increasing reference point (Eq. 5.22) |
 | `Grade_Bin` | Grade class A to F (Table 1-1) |
 | `Line_Off_Road` (P) | As in D.1 |
 
@@ -2607,12 +2613,13 @@ Distances (`_Dist`) are in meters along the route, on the basis of Eq. 2.3 (zero
 | `Elev_Ft` | Smoothed elevation (ft) |
 | `Raw_Lon`, `Raw_Lat` | Densified HPMS position (degrees) |
 | `Elev_Raw_Ft` | DEM elevation at the densified HPMS position, gaps filled (ft) |
+| `Elev_Source` | DEM, Span line, Lidar deck, Gap line, or Clearance floor (Section 5.2.11) |
 | `Grade_Pct` | Regression grade over ±500 ft (%) (Eq. 5.8) |
 | `Heading_Deg_Unwrapped` | Heading, counterclockwise from east, unwrapped (degrees) (Eq. 4.3) |
 | `Structure_Tier` | 1_HPMS, 2_NBI, 3_DIP, or None (Section 5.2.8) |
 | `Structure_Kind` | Bridge, Tunnel, or None |
 | `Structure_Record` | HPMS, NBI, or None: a structure record matched at the point, span or not |
-| `Micro_Jitter_Inches` | Roughness proxy (in) (Eq. 5.24) |
+| `Micro_Jitter_Inches` | Roughness proxy (in) (Eq. 5.26) |
 | `Available_Sight_Dist_Ft` | Available sight distance (ft); blank where not known (Section 5.8) |
 | `H_Curve_Type` | Left, Right, or Tangent |
 | `H_Curve_Bin` (A) | Horizontal curve class at the point (A on tangents) |
@@ -2712,18 +2719,6 @@ All HPMS fields of the record (or those selected), plus:
 | `Elevation_Source` | smoothed or raw_fallback (Sections 8.2, 8.3) |
 | `curves_a` to `curves_f`, `grades_a` to `grades_f` | Replaced with RAT lengths (mi) when that option is selected (Section 8.4) |
 
-### D.12 Calibration Audit
-
-| Column | Meaning |
-| :--- | :--- |
-| `timestamp`, `state_fips`, `f_sys`, `mode` | Run time, State, functional class, and mode (H) |
-| `repeat` | Repeat number, or MEDIAN for the final row |
-| `n_chunks_sampled` | Pieces in the sample |
-| `selected_factor`, `stabilized` | Selected factor and whether one was found |
-| `diagnostic_value`, `diagnostic_units` | Overlap at selection (repeats) or spread ratio (MEDIAN rows) |
-| `departure_p99_ft` | 99th percentile departure at curve points at the selected factor (ft; Eq. 9.5) |
-| `fidelity_cap` | Largest grid value within the 6-foot limit |
-
 ---
 
 ## Appendix E: File Structure
@@ -2741,13 +2736,9 @@ RAT_Suite_v3.3/
 │   ├── rat_cross_section.py                   Cross sections and crossings (Chapters 6, 7)
 │   ├── rat_param_summary.py                   Run-parameter panels for maps, dashboards, PDFs
 │   ├── rat_structure_report.py                Bridge and tunnel span list and PDF
-│   ├── rat_dem_relief.py                      Shaded relief from the cached DEM tiles
-│   ├── national_smoothing_factors.json        Horizontal smoothing factors (Appendix C)
-│   └── national_curve_class_proportions.json  HPMS curve class shares for the calibration (Section 9.2)
+│   ├── rat_lidar.py                           3DEP lidar download and bridge deck elevations (Section 5.2.11)
+│   └── rat_dem_relief.py                      Shaded relief from the cached DEM tiles
 ├── tools/
-│   ├── rat_national_calibration.py            Calibration (Chapter 9)
-│   ├── pull_national_curve_distribution.py    HPMS curve class shares for sample sizes
-│   ├── rat_calibration_diagnostics.py         Charts and checks of the calibration audit
 │   ├── rat_structure_span_check.py            Re-runs span detection on existing vertex tables
 │   └── rat_results_validator.py               Validator (Chapter 11)
 ├── NBI/
@@ -2765,11 +2756,10 @@ RAT_Suite_v3.3/
 └── .gitignore
 ```
 
-Two of the files in `core` are made by the tools in `tools`: `national_smoothing_factors.json` is the filled output of the calibration (Section 9.5), and `national_curve_class_proportions.json` is written by `pull_national_curve_distribution.py` (Section 9.2). Both are included so that the suite can be used, and the calibration rerun, without running those tools first.
-
 Files made by the tools when the suite is used:
 
 - The DEM tile cache, `align_1m_cache` in the user's DEM folder, with one `tile_1m_hr<lat>_<lon>.tif` file per tile and `.missing` markers for tiles with no data (Section 2.5.1).
+- The lidar cache, a `lidar` folder in the DEM folder, with the points read for each bridge, whole USGS tiles in `lidar/_raw`, and, while a run is downloading, `.lock` and `.part` files (Section 5.2.11). The `_raw` folder can grow large and can be emptied between runs.
 - `run_params.json` in the output folder, with the settings of the last run. It holds the user's Socrata token and local paths and should not be shared or committed to a repository.
 - The output folders and files described in Chapter 10.
 
@@ -2783,9 +2773,10 @@ Files made by the tools when the suite is used:
 | Algebraic difference ($A$) | The change in grade across a vertical curve, leaving grade minus entering grade, in percent |
 | ARNOLD | All Road Network of Linear Referenced Data, the road network geometry States submit with HPMS |
 | Available sight distance | How far ahead a driver can see a 2-foot object over the profile (Section 5.8) |
+| Clearance floor | The lowest a bridge deck over a navigable channel can be: the water plus the NBI navigation vertical clearance (Section 5.2.11) |
 | Continuity chunk | A physically continuous piece of a route, made by joining its HPMS records (Section 2.3); reported as `Part` |
 | Crest | A vertical curve that is convex upward, at the top of a hill |
-| Deflection angle | The total change in direction through a horizontal curve, in degrees |
+| Deflection angle | The total change in direction through a horizontal curve, spirals included, in degrees |
 | Degree of curve | The angle subtended by a 100-foot arc of a curve; larger for sharper curves (Eq. 4.11) |
 | DEM | Digital elevation model; here, the bare-earth 3DEP model |
 | Densification | Adding evenly spaced points along a line (Section 3.2) |
@@ -2793,19 +2784,24 @@ Files made by the tools when the suite is used:
 | FIPS code | Two-digit Federal code for a State |
 | Functional class | One of the seven classes of the HPMS functional system: 1 Interstate, 2 Principal Arterial – Other Freeways and Expressways, 3 Principal Arterial – Other, 4 Minor Arterial, 5 Major Collector, 6 Minor Collector, 7 Local |
 | Functional system | The HPMS functional classification item (`F_SYSTEM`), made up of the seven functional classes |
+| Gap line | A straight line across a stretch of bridge deck with no lidar points (Section 5.2.11) |
 | Grade segment | A piece of road between vertical points of intersection, with one grade (Section 5.7) |
 | HPMS | Highway Performance Monitoring System |
 | Inventory direction | The direction of a divided highway that HPMS records as the route; the other direction is the non-inventory direction (facility type 6) |
 | K value | Length of vertical curve per percent of grade change, in feet (Eq. 5.13) |
+| Lidar | Light detection and ranging; the airborne laser surveys whose point clouds 3DEP publishes (Section 5.2.11) |
+| Measured run | The stretch where a horizontal curve's smoothed curvature is above the straight-road threshold; longer than the curve from PC to PT (Section 4.3) |
 | NBI, NTI | National Bridge Inventory and National Tunnel Inventory |
 | Normal crown (NC) | A cross section that slopes down both ways from the middle, with no superelevation |
+| PC, PT | Point of curvature (start of a horizontal curve) and point of tangency (its end); in RAT, where the smoothed curvature reaches half that of the curve's main arc (Section 4.4.2) |
+| PI | Point of intersection, where the tangents on either side of a horizontal curve meet (Section 4.4.3) |
 | PVC, PVT | Point of vertical curvature (start of a vertical curve) and point of vertical tangency (its end) |
 | Reference point (RP) | A position along an HPMS route, in miles from its origin; called "milepost" or "MP" in the code and outputs |
 | Sag | A vertical curve that is concave upward, at the bottom of a dip |
-| SC, CS | Spiral-to-curve and curve-to-spiral points, the ends of the circular part of a curve with spirals |
 | Smoothing factor | The number that sets how closely a smoothing spline follows the data (Section 3.3.1) |
 | Smoothing spline | A smooth curve made of cubic pieces that passes close to, but not through, the data (Section 3.3) |
-| Span | A bridge or tunnel stretch found in the profile and replaced with a straight line (Section 5.2) |
+| Span | A bridge or tunnel stretch found in the profile and replaced with a straight line, or on a bridge with the deck measured from lidar (Section 5.2) |
+| Spiral | A transition curve whose curvature changes gradually between a tangent and a circular arc; not reported separately by RAT (Section 4.4.2) |
 | Superelevation | The cross slope of a roadway through a curve, sloping down toward the inside |
 | UTM | Universal Transverse Mercator, the flat coordinate system in meters used for processing |
 | Viterbi labeling | The method that labels each point as tangent or curve by finding the most likely sequence of labels (Section 4.2.2) |
