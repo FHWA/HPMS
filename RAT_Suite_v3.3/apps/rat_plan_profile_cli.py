@@ -45,7 +45,7 @@ travel (curve direction, cross-section sides, grade signs and sight
 distance), and the tables list reference points in decreasing order.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, November 22, 2026
+VERSION: 3.3, November 25, 2026
 """
 import os
 import sys
@@ -711,7 +711,7 @@ def main():
         h = analyze_horizontal_curvature(res["coords_m_smooth"], spacing_m, params)
         if params.get("ENABLE_MERGE", False):
             h = merge_horizontal_curves(h, params, res["coords_m_smooth"], spacing_m)
-        v = analyze_vertical_parabolic(res["z_smooth"], spacing_m, params)
+        v = analyze_vertical_parabolic(res["z_smooth"], spacing_m, params, z_fit=res.get("z_fixed"))
         g = build_grade_segments(res["z_smooth"], spacing_m, v)
         # Curves where measured bridge deck meets a stretch with no lidar
         # points are left out (see vertical_curves_on_measured); the grades
@@ -735,7 +735,7 @@ def main():
             c["FSystem"] = info["f_sys"]
             c["Calibrated_Start_MP"] = chunk_s_mp + (c["Start_Dist"] / total_len) * (chunk_e_mp - chunk_s_mp)
             c["Calibrated_End_MP"] = chunk_s_mp + (c["End_Dist"] / total_len) * (chunk_e_mp - chunk_s_mp)
-            for key in ("Start_Dist", "End_Dist", "VPI_Dist"):
+            for key in ("Start_Dist", "End_Dist", "Run_Start_Dist", "Run_End_Dist", "VPI_Dist"):
                 if key in c:
                     c[key] += info["global_start_dist_m"]
         add_speed_reference(v, sub, info["f_sys"], speed_mph)

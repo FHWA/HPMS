@@ -30,7 +30,7 @@ the same output. Elevations come from the USGS 3DEP 1 m DEM, cached in
 align_1m_cache under the DEM directory.
 
 CREATED BY: Federal Highway Administration, Office of Highway Policy Information.
-VERSION: 3.3, November 22, 2026
+VERSION: 3.3, November 25, 2026
 """
 import os
 import glob
@@ -321,7 +321,7 @@ def process_chunk(route_id: str, item: dict, dem_dir: str, params: dict,
     h_curves = analyze_horizontal_curvature(res["coords_m_smooth"], spacing_m, params)
     if params.get("ENABLE_MERGE", False):
         h_curves = merge_horizontal_curves(h_curves, params, res["coords_m_smooth"], spacing_m)
-    v_curves = analyze_vertical_parabolic(z_smooth, spacing_m, params)
+    v_curves = analyze_vertical_parabolic(z_smooth, spacing_m, params, z_fit=res.get("z_fixed"))
     segments = build_grade_segments(z_smooth, spacing_m, v_curves)
     # Curves where measured bridge deck meets a stretch with no lidar points
     # are left out (see vertical_curves_on_measured); the grades keep them.
